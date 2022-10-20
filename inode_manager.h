@@ -60,7 +60,7 @@ class block_manager {
 // Bitmap bits per block
 #define BPB           (BLOCK_SIZE*8)
 
-// Block containing bit for block b
+// Block containing bit for block b, range in [2,10], superblock is the first block
 #define BBLOCK(b) ((b)/BPB + 2)
 
 #define NDIRECT 100

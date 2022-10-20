@@ -35,9 +35,13 @@
 #include "extent_client.h"
 #include <stdio.h>
 
+
+// origin :50
 #define FILE_NUM 50
+// origin: 512*10
 #define LARGE_FILE_SIZE_MIN 512*10
 #define LARGE_FILE_SIZE_MAX 512*200
+//#define LARGE_FILE_SIZE_MAX 512*20
 
 #define iprint(msg) \
     printf("[TEST_ERROR]: %s\n", msg);
@@ -101,6 +105,11 @@ int test_indirect()
     printf("begin test indirect\n");
     srand((unsigned)time(NULL));
 
+    std::string std_opt = "std_op.out";
+    std::string my_opt = "my_op.out";
+    FILE* fp1 = fopen(std_opt.c_str(), "w");
+    FILE* fp2 = fopen(my_opt.c_str(), "w");
+
     for (i = 0; i < FILE_NUM; i++) {
         if (ec->create(extent_protocol::T_FILE, id_list[i]) != extent_protocol::OK) {
             printf("error create, return not OK\n");
@@ -130,8 +139,16 @@ int test_indirect()
                 return 2;
             }
             if (buf.compare(content[i]) != 0) {
-                std::cout << "error get large file, not consistent with put large file : " << 
-                    buf << " <-> " << content[i] << "\n";
+                // std::cout << "error get large file, not consistent with put large file : " << 
+                //     buf << " <-> " << content[i] << "\n";
+                fprintf(fp2, "%s", buf.c_str()); fprintf(fp1, "%s", content[i].c_str());
+                printf("error get large file, round=%d l1=%ld l2=%ld\n", j, buf.length(), content[i].length());
+                for (size_t iii = 0; iii < buf.length(); ++iii) {
+                    if (buf[iii] != content[i][iii]) {
+                        printf("differ at pos %ld my(ascii): %d std: %d\n", iii, buf[iii], content[i][iii]);
+                        break;
+                    }
+                }
                 return 3;
             }
         }
