@@ -22,14 +22,16 @@ class extent_server {
   inode_manager *im;
   chfs_persister *_persister;
 
+  FILE* debugfp;
  public:
   extent_server();
-
-  int create(uint32_t type, extent_protocol::extentid_t &id);
-  int put(extent_protocol::extentid_t id, std::string, int &);
-  int get(extent_protocol::extentid_t id, std::string &);
-  int getattr(extent_protocol::extentid_t id, extent_protocol::attr &);
-  int remove(extent_protocol::extentid_t id, int &);
+  int create(uint32_t type, unsigned long long tid, extent_protocol::extentid_t &id);
+  int put(extent_protocol::extentid_t id, unsigned long long tid, std::string, int &);
+  int get(extent_protocol::extentid_t id, unsigned long long tid, std::string &);
+  int getattr(extent_protocol::extentid_t id, unsigned long long tid, extent_protocol::attr &);
+  int remove(extent_protocol::extentid_t id, unsigned long long tid, int &);
+  void begin_transaction(unsigned long long &tid);
+  void end_transaction(unsigned long long tid);
 
   // Your code here for lab2A: add logging APIs
 };

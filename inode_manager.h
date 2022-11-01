@@ -15,13 +15,14 @@ typedef uint32_t blockid_t;
 // disk layer -----------------------------------------
 
 class disk {
- private:
-  unsigned char blocks[BLOCK_NUM][BLOCK_SIZE];
-
  public:
+  unsigned char blocks[BLOCK_NUM][BLOCK_SIZE];
   disk();
   void read_block(uint32_t id, char *buf);
   void write_block(uint32_t id, const char *buf);
+  int read_bit(uint32_t id, int byte_bios, int bit_bios);
+  void set_bit_one(uint32_t id, int byte_bios, int bit_bios);
+  void set_bit_zero(uint32_t id, int byte_bios, int bit_bios);
 };
 
 // block layer -----------------------------------------
@@ -33,10 +34,9 @@ typedef struct superblock {
 } superblock_t;
 
 class block_manager {
- private:
+ public:
   disk *d;
   std::map <uint32_t, int> using_blocks;
- public:
   block_manager();
   struct superblock sb;
 
@@ -60,7 +60,7 @@ class block_manager {
 // Bitmap bits per block
 #define BPB           (BLOCK_SIZE*8)
 
-// Block containing bit for block b
+// Block containing bit for block b, range in [2,10], superblock is the first block
 #define BBLOCK(b) ((b)/BPB + 2)
 
 #define NDIRECT 100
@@ -77,19 +77,24 @@ typedef struct inode {
 } inode_t;
 
 class inode_manager {
- private:
+private:
   block_manager *bm;
   struct inode* get_inode(uint32_t inum);
   void put_inode(uint32_t inum, struct inode *ino);
 
  public:
+  ~inode_manager();
   inode_manager();
   uint32_t alloc_inode(uint32_t type);
+  uint32_t lookup_inode();
+  void assign_inode(uint32_t inum, uint32_t type);
   void free_inode(uint32_t inum);
   void read_file(uint32_t inum, char **buf, int *size);
   void write_file(uint32_t inum, const char *buf, int size);
   void remove_file(uint32_t inum);
   void get_attr(uint32_t inum, extent_protocol::attr &a);
+  std::string snapshot();
+  void restore_snapshot(std::string);
 };
 
 #endif
