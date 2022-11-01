@@ -18,6 +18,7 @@
 #include "lang/verify.h"
 #include "chfs_client.h"
 #include "gettime.h"
+#define FUSE_DEBUG 0
 
 int myid;
 chfs_client *chfs;
@@ -60,7 +61,10 @@ getattr(chfs_client::inum inum, struct stat &st)
         st.st_mtime = info.mtime;
         st.st_ctime = info.ctime;
         st.st_size = info.size;
-        printf("   getattr -> inum=%lld sz=%llu file\n", inum, info.size);
+        if (FUSE_DEBUG) {
+            printf("   getattr -> inum=%lld sz=%llu file\n", inum, info.size);
+            fflush(stdout);
+        }
     } else if(chfs->isdir(inum)){ // isdir
         chfs_client::dirinfo info;
         ret = chfs->getdir(inum, info);
@@ -71,7 +75,10 @@ getattr(chfs_client::inum inum, struct stat &st)
         st.st_atime = info.atime;
         st.st_mtime = info.mtime;
         st.st_ctime = info.ctime;
-        printf("   getattr -> inum=%lld at=%lu mt=%lu ct=%lu dir\n", inum, info.atime, info.mtime, info.ctime);
+        if (FUSE_DEBUG) {
+            printf("   getattr -> inum=%lld at=%lu mt=%lu ct=%lu dir\n", inum, info.atime, info.mtime, info.ctime);
+            fflush(stdout);
+        }
     }
     else if(chfs->issymlink(inum)){ // symlink
         chfs_client::fileinfo info;
@@ -85,10 +92,16 @@ getattr(chfs_client::inum inum, struct stat &st)
         st.st_mtime = info.mtime;
         st.st_ctime = info.ctime;
         st.st_size = info.size;
-        printf("  getattr -> inum=%lld sz=%llu sym\n", inum, info.size);
+        if (FUSE_DEBUG) {
+            printf("  getattr -> inum=%lld sz=%llu sym\n", inum, info.size);
+            fflush(stdout);
+        }
     }
     else {
-        printf("getattr wrong type inum=%lld\n", inum);
+        if (FUSE_DEBUG) {
+            printf("getattr wrong type inum=%lld\n", inum);
+            fflush(stdout);
+        }
         return chfs_client::IOERR;
     }
     return chfs_client::OK;
@@ -142,8 +155,10 @@ void
 fuseserver_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
         int to_set, struct fuse_file_info *fi)
 {
-    printf("fuseserver_setattr 0x%x\n", to_set);
+    if (FUSE_DEBUG)
+        printf("fuseserver_setattr 0x%x\n", to_set);
     if (FUSE_SET_ATTR_SIZE & to_set) {
+        if (FUSE_DEBUG)
         printf("   fuseserver_setattr set size to %zu\n", attr->st_size);
 
 #if 1
@@ -285,7 +300,8 @@ fuseserver_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     chfs_client::status ret;
     if( (ret = fuseserver_createhelper( parent, name, mode, &e, extent_protocol::T_FILE)) == chfs_client::OK ) {
         fuse_reply_create(req, &e, fi);
-        printf("OK: create returns.\n");
+        if (FUSE_DEBUG)
+            printf("OK: create returns.\n");
     } else {
         if (ret == chfs_client::EXIST) {
             fuse_reply_err(req, EEXIST);
@@ -388,6 +404,7 @@ fuseserver_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     chfs_client::inum inum = ino; // req->in.h.nodeid;
     struct dirbuf b;
 
+    if (FUSE_DEBUG)
     printf("fuseserver_readdir\n");
 
     if(!chfs->isdir(inum)){
@@ -450,8 +467,10 @@ fuseserver_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     }
     e->ino = inum;
     getattr(inum, e->attr);
-    printf("fuse layer: created inum=%ld name=%s in parent=%ld\n", e->ino, name, parent);
-    printf("fuse layer: called attr to get inum's attr\n");
+    if (FUSE_DEBUG) {
+        printf("fuse layer: created inum=%ld name=%s in parent=%ld\n", e->ino, name, parent);
+        printf("fuse layer: called attr to get inum's attr\n");
+    }
     fuse_reply_entry(req, e);
 #else
     fuse_reply_err(req, ENOSYS);
@@ -530,7 +549,8 @@ fuseserver_statfs(fuse_req_t req)
 {
     struct statvfs buf;
 
-    printf("statfs\n");
+    if (FUSE_DEBUG)
+        printf("statfs\n");
 
     memset(&buf, 0, sizeof(buf));
 

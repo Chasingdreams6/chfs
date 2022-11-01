@@ -13,6 +13,7 @@
 #include "chfs_client.h"
 #include "extent_client.h"
 
+#define CHFS_DEBUG 0
 /* 
  * Your code here for Lab2A:
  * Here we treat each ChFS operation(especially write operation such as 'create', 
@@ -39,8 +40,11 @@ chfs_client::chfs_client()
 chfs_client::chfs_client(std::string extent_dst, std::string lock_dst)
 {
     ec = new extent_client();
-    if (ec->put(1, "") != extent_protocol::OK)
-        printf("error init root dir\n"); // XYB: init root dir
+    unsigned long long tid;
+    ec->begin_transaction(tid);
+    if (ec->put(1, "", tid) != extent_protocol::OK)
+        printf("Fatal:error init root dir\n"); // XYB: init root dir
+    ec->end_transaction(tid);
 }
 
 /* trans string to ull*/
@@ -68,16 +72,20 @@ chfs_client::isfile(inum inum)
 {
     extent_protocol::attr a;
 
-    if (ec->getattr(inum, a) != extent_protocol::OK) {
+    unsigned long long tid;
+    ec->begin_transaction(tid);
+    if (ec->getattr(inum, a, tid) != extent_protocol::OK) {
         printf("error getting attr\n");
         return false;
     }
-
+    ec->end_transaction(tid);
     if (a.type == extent_protocol::T_FILE) {
-        printf("isfile: %lld is a file\n", inum);
+        if (CHFS_DEBUG)
+            printf("isfile: %lld is a file\n", inum);
         return true;
     } 
-    printf("isfile: %lld is a dir or symlink\n", inum);
+    if (CHFS_DEBUG)
+        printf("isfile: %lld is a dir or symlink\n", inum);
     return false;
 }
 /** Your code here for Lab...
@@ -88,13 +96,18 @@ chfs_client::isfile(inum inum)
 bool
 chfs_client::issymlink(inum inum) {
     extent_protocol::attr a;
+    
+    unsigned long long tid;
+    ec->begin_transaction(tid);
 
-    if (ec->getattr(inum, a) != extent_protocol::OK) {
+    if (ec->getattr(inum, a, tid) != extent_protocol::OK) {
         printf("error getting attr\n");
         return false;
     }
+    ec->end_transaction(tid);
     if (a.type == extent_protocol::T_SYM) {
-        printf("issymlink: %lld is a symlink\n", inum);
+        if (CHFS_DEBUG)
+            printf("issymlink: %lld is a symlink\n", inum);
         return true;
     }
     return false;
@@ -104,13 +117,17 @@ bool
 chfs_client::isdir(inum inum)
 {
     extent_protocol::attr a;
+    unsigned long long tid;
+    ec->begin_transaction(tid);
 
-    if (ec->getattr(inum, a) != extent_protocol::OK) {
+    if (ec->getattr(inum, a, tid) != extent_protocol::OK) {
         printf("error getting attr\n");
         return false;
     }
+    ec->end_transaction(tid);
     if (a.type == extent_protocol::T_DIR) {
-        printf("isdir: %lld is a dir\n", inum);
+        if (CHFS_DEBUG)
+            printf("isdir: %lld is a dir\n", inum);
         return true;
     }
     return false;
@@ -122,15 +139,19 @@ chfs_client::symlink(inum parent, const char* link, const char* name, inum &ino_
     int r = OK;
     std::string buf;
     
-    EXT_RPC(ec->create(extent_protocol::T_SYM, ino_out));
+    unsigned long long tid; 
+    ec->begin_transaction(tid); // start tX
+
+    EXT_RPC(ec->create(extent_protocol::T_SYM, ino_out, tid));
     buf = std::string(link);
-    EXT_RPC(ec->put(ino_out, buf));
+    EXT_RPC(ec->put(ino_out, buf, tid));
 
     /*add a file to parent*/
-    EXT_RPC(ec->get(parent, buf));
+    EXT_RPC(ec->get(parent, buf, tid));
     buf = buf + "&" + std::string(name) + "&" + filename(ino_out);
-    EXT_RPC(ec->put(parent, buf));
+    EXT_RPC(ec->put(parent, buf, tid));
 
+    ec->end_transaction(tid); // end tX
 release:
     return r;
 }
@@ -141,11 +162,14 @@ chfs_client::readlink(inum ino, std::string &data)
     int r = OK;
     //std::vector<std::string> res;
     std::string buf;
-
-    EXT_RPC(ec->get(ino, buf));
+    unsigned long long tid;
+    ec->begin_transaction(tid);
+    EXT_RPC(ec->get(ino, buf, tid));
+    ec->end_transaction(tid);
     //res = split(buf, '\0');
     data = buf;
-    printf("&&&&&&& readlink: ino=%lld link=%s\n", ino, buf.c_str());
+    if (CHFS_DEBUG)
+        printf("&&&&&&& readlink: ino=%lld link=%s\n", ino, buf.c_str());
 release:
     return r;
 }
@@ -155,19 +179,21 @@ int
 chfs_client::getfile(inum inum, fileinfo &fin)
 {
     int r = OK;
-
+    unsigned long long tid;
+    ec->begin_transaction(tid);
     //printf("getfile inum=%lld\n", inum);
     extent_protocol::attr a;
-    if (ec->getattr(inum, a) != extent_protocol::OK) {
+    if (ec->getattr(inum, a, tid) != extent_protocol::OK) {
         r = IOERR;
         goto release;
     }
-
+    ec->end_transaction(tid);
     fin.atime = a.atime;
     fin.mtime = a.mtime;
     fin.ctime = a.ctime;
     fin.size = a.size;
-    printf("getfile inum=%lld -> sz %llu\n", inum, fin.size);
+    if (CHFS_DEBUG)
+        printf("getfile inum=%lld -> sz %llu\n", inum, fin.size);
 
 release:
     return r;
@@ -178,13 +204,16 @@ int
 chfs_client::getdir(inum inum, dirinfo &din)
 {
     int r = OK;
-
-    printf("getdir inum=%lld\n", inum);
+    unsigned long long tid;
+    ec->begin_transaction(tid);
+    if (CHFS_DEBUG)
+        printf("getdir inum=%lld\n", inum);
     extent_protocol::attr a;
-    if (ec->getattr(inum, a) != extent_protocol::OK) {
+    if (ec->getattr(inum, a, tid) != extent_protocol::OK) {
         r = IOERR;
         goto release;
     }
+    ec->end_transaction(tid);
     din.atime = a.atime;
     din.mtime = a.mtime;
     din.ctime = a.ctime;
@@ -207,13 +236,18 @@ chfs_client::setattr(inum ino, size_t size)
      * note: get the content of inode ino, and modify its content
      * according to the size (<, =, or >) content length.
      */
-    EXT_RPC(ec->getattr(ino, attr));
-    EXT_RPC(ec->get(ino, buf));
+    unsigned long long tid;
+    ec->begin_transaction(tid);
+
+    EXT_RPC(ec->getattr(ino, attr, tid));
+    EXT_RPC(ec->get(ino, buf, tid));
     if (attr.size < size)
         buf += std::string(size - attr.size, '\0');
     else if (attr.size > size)
         buf = buf.substr(0, size);
-    EXT_RPC(ec->put(ino, buf));
+    EXT_RPC(ec->put(ino, buf, tid));
+
+    ec->end_transaction(tid);
 release: 
     return r;
 }
@@ -224,26 +258,44 @@ chfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
 {
     int r = OK;
     bool found = false;
+    //extent_protocol::attr attr;
     std::string buf;
+    unsigned long long tid;
+    std::string tmp_buf = "";
     /*
      * your code goes here.
      * note: lookup is what you need to check if file exist;
      * after create file or dir, you must remember to modify the parent infomation.
-     */
+     */ 
     r = lookup(parent, name, found, ino_out);
     if (r != OK) goto release;
     if (found) {
         r = EXIST;
         goto release;
     }
-    EXT_RPC(ec->create(extent_protocol::T_FILE, ino_out));
-    setattr(ino_out, 0);
-    /*add a dirent to parent's information*/
-    EXT_RPC(ec->get(parent, buf));
-    buf = buf + "&" + std::string(name) + "&" + filename(ino_out);
-    EXT_RPC(ec->put(parent, buf));
+  
+    ec->begin_transaction(tid);   
 
-    printf("create file parent=%lld name=%s inum=%lld\n", parent, name, ino_out);
+    EXT_RPC(ec->create(extent_protocol::T_FILE, ino_out, tid));
+    //setattr(ino_out, 0); 
+    /*is the expansion of setattr*/
+ 
+    // EXT_RPC(ec->getattr(ino_out, attr, tid));
+    // EXT_RPC(ec->get(ino_out, tmp_buf, tid));
+    // if (attr.size < 0)
+    //     tmp_buf += std::string(0 - attr.size, '\0');
+    // else if (attr.size > 0)
+    //     tmp_buf = tmp_buf.substr(0, 0); 
+    EXT_RPC(ec->put(ino_out, tmp_buf, tid));   // actually clean the file
+
+    /*add a dirent to parent's information*/
+    EXT_RPC(ec->get(parent, buf, tid));
+    buf = buf + "&" + std::string(name) + "&" + filename(ino_out);
+    EXT_RPC(ec->put(parent, buf, tid));
+
+    ec->end_transaction(tid);
+    if (CHFS_DEBUG)
+        printf("create file parent=%lld name=%s inum=%lld\n", parent, name, ino_out);
 release: return r;
 }
 
@@ -254,6 +306,8 @@ chfs_client::mkdir(inum parent, const char *name, mode_t mode, inum &ino_out)
     int r = OK;
     bool found = false;
     std::string buf;
+    unsigned long long tid;
+    std::string tmp_buf = "";
     /*
      * your code goes here.
      * note: lookup is what you need to check if directory exist;
@@ -270,14 +324,22 @@ chfs_client::mkdir(inum parent, const char *name, mode_t mode, inum &ino_out)
         r = EXIST;
         goto release;
     }
-    EXT_RPC(ec->create(extent_protocol::T_DIR, ino_out));
-    setattr(ino_out, 0); // make the new dir empty
-    /*add a dirent to parent's information*/
-    EXT_RPC(ec->get(parent, buf));
-    buf = buf + "&" + std::string(name) + "&" + filename(ino_out);
-    EXT_RPC(ec->put(parent, buf));
+    
+    ec->begin_transaction(tid);   
 
-    printf("create dir parent=%lld name=%s inum=%lld\n", parent, name, ino_out);
+    EXT_RPC(ec->create(extent_protocol::T_DIR, ino_out, tid));
+    //setattr(ino_out, 0); // make the new dir empty
+
+    EXT_RPC(ec->put(ino_out, tmp_buf, tid));   // actually clean the file
+
+    /*add a dirent to parent's information*/
+    EXT_RPC(ec->get(parent, buf, tid));
+    buf = buf + "&" + std::string(name) + "&" + filename(ino_out);
+    EXT_RPC(ec->put(parent, buf, tid));
+
+    ec->end_transaction(tid);
+    if (CHFS_DEBUG)
+        printf("create dir parent=%lld name=%s inum=%lld\n", parent, name, ino_out);
 release:
     return r;
 }
@@ -293,9 +355,11 @@ chfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
      * note: lookup file from parent dir according to name;
      * you should design the format of directory content.
      */
-
+    unsigned long long tid;
+    ec->begin_transaction(tid);   
     extent_protocol::attr attr;
-    ec->getattr(parent, attr);
+    ec->getattr(parent, attr, tid);
+    ec->end_transaction(tid);
     if (attr.type != extent_protocol::T_DIR)
     {
         return EXIST;
@@ -313,7 +377,8 @@ chfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
             }
         }
     }
-    printf("lookup file/symlink in parent=%lld name=%s ino=%lld found=%d\n", parent, name, ino_out, found);
+    if (CHFS_DEBUG)
+        printf("lookup file/symlink in parent=%lld name=%s ino=%lld found=%d\n", parent, name, ino_out, found);
 release:
     return r;
 }
@@ -332,7 +397,10 @@ chfs_client::lookupdir(inum parent, const char *name, bool &found, inum &ino_out
      */
 
     extent_protocol::attr attr;
-    ec->getattr(parent, attr);
+    unsigned long long tid;
+    ec->begin_transaction(tid);   
+    ec->getattr(parent, attr, tid);
+    ec->end_transaction(tid);
     if (attr.type != extent_protocol::T_DIR)
     {
         return EXIST;
@@ -343,7 +411,8 @@ chfs_client::lookupdir(inum parent, const char *name, bool &found, inum &ino_out
     found = false; ino_out = 0;
     for (it = list.begin(); it != list.end(); ++it) {
         if (!strcmp(name, (*it).name.c_str())) {
-            printf("matched name=%s isdir=%d\n", name, isdir((*it).inum));
+            if (CHFS_DEBUG)
+                printf("matched name=%s isdir=%d\n", name, isdir((*it).inum));
             if (isdir((*it).inum)) {
                 ino_out = (*it).inum;
                 found = true;
@@ -351,7 +420,8 @@ chfs_client::lookupdir(inum parent, const char *name, bool &found, inum &ino_out
             }
         }
     }
-    printf("lookupdir in parent=%lld name=%s ino=%lld found=%d\n", parent, name, ino_out, found);
+    if (CHFS_DEBUG)
+        printf("lookupdir in parent=%lld name=%s ino=%lld found=%d\n", parent, name, ino_out, found);
 release:
     return r;
 }
@@ -389,10 +459,14 @@ chfs_client::readdir(inum dir, std::list<dirent> &list)
      * note: you should parse the dirctory content using your defined format,
      * and push the dirents to the list.
      */
-    printf("try to read dir inum=%lld\n", dir);
+    if (CHFS_DEBUG)
+        printf("try to read dir inum=%lld\n", dir);
     if (!isdir(dir)) return chfs_client::NOENT;
 
-    EXT_RPC(ec->get(dir, buf));
+    unsigned long long tid;
+    ec->begin_transaction(tid);   
+    EXT_RPC(ec->get(dir, buf, tid));
+    ec->end_transaction(tid);
     res = split(buf, "&");
     size = res.size();
     for (int i = 0; i < size; i += 2) {
@@ -415,17 +489,25 @@ chfs_client::read(inum ino, size_t size, off_t off, std::string &data)
      * your code goes here.
      * note: read using ec->get().
      */
-    EXT_RPC(ec->get(ino, buf));
+    unsigned long long tid;
+    ec->begin_transaction(tid);       
+    EXT_RPC(ec->get(ino, buf, tid));
+    if (CHFS_DEBUG)
+        printf("chfs_layer: read inum=%lld buflen=%ld aholefile=%s\n", ino, buf.length(), buf.data());
     if (off + size > buf.length()) {
         actual_size = buf.length() - off;
     }
     else actual_size = size;
     if (actual_size <= 0) {
         data = "";
+        if (CHFS_DEBUG)
+            printf("chfs_layer: inum=%lld off > filesize, read nothing", ino);
         goto release;
     }
     data = buf.substr(off, actual_size);
-    printf("finish read inum=%lld size=%lu off=%ld data=%s\n", ino, size, off, data.c_str());
+    if (CHFS_DEBUG)
+        printf("finish read inum=%lld size=%lu actualSize=%d off=%ld data=%s\n", ino, size, actual_size, off, data.c_str());
+    ec->end_transaction(tid);
 release:
     return r;
 }
@@ -438,13 +520,19 @@ chfs_client::write(inum ino, size_t size, off_t off, const char *data,
     int r = OK;
     std::string buf;
     std::string data_buf = std::string(data, size);
-    EXT_RPC(ec->get(ino, buf));
+    unsigned long long tid;
+    ec->begin_transaction(tid);       
+    EXT_RPC(ec->get(ino, buf, tid));
     if (size + off > buf.length())
         buf.resize(off + size, '\0');
     bytes_written = size;
     buf.replace(off, size, data_buf);
-    EXT_RPC(ec->put(ino, buf));
-    printf("finish write inum=%lld size=%lu off=%ld \n", ino, size, off);
+    EXT_RPC(ec->put(ino, buf, tid));
+    ec->end_transaction(tid);
+    if (CHFS_DEBUG) {
+        printf("finish write inum=%lld size=%lu off=%ld \n", ino, size, off);
+        fflush(stdout);
+    }
     /*
      * your code goes here.
      * note: write using ec->put().
@@ -485,12 +573,15 @@ int chfs_client::unlink(inum parent,const char *name)
      * note: you should remove the file using ec->remove,
      * and update the parent directory content.
      */
-    printf("start unlink parent=%lld name=%s\n", parent, name);
+    if (CHFS_DEBUG)
+        printf("start unlink parent=%lld name=%s\n", parent, name);
     r = readdir(parent, list);
+    uint32_t target_inum;
     for (it = list.begin(); it != list.end(); it++) {
         if (!strcmp(name, (*it).name.c_str())) {
             if (isfile((*it).inum) || issymlink((*it).inum)) {
-                EXT_RPC(ec->remove((*it).inum));
+                //EXT_RPC(ec->remove((*it).inum));
+                target_inum = (*it).inum;
                 flag = true;
                 list.erase(it);
                 break;
@@ -500,11 +591,16 @@ int chfs_client::unlink(inum parent,const char *name)
     if (!flag) { // not erase
         return chfs_client::NOENT;
     }
+    unsigned long long tid;
+    ec->begin_transaction(tid);       
+    EXT_RPC(ec->remove(target_inum, tid));
     for (it = list.begin(); it != list.end(); it++) {
         buf = buf + "&" + (*it).name + "&" +  filename((*it).inum);
     }
-    EXT_RPC(ec->put(parent, buf)); //edit parent file
-    printf("success unlink: parent=%lld name=%s\n", parent, name);
+    EXT_RPC(ec->put(parent, buf, tid)); //edit parent file
+    ec->end_transaction(tid);
+    if (CHFS_DEBUG)
+        printf("success unlink: parent=%lld name=%s\n", parent, name);
 release:
     return r;
 }

@@ -14,13 +14,15 @@ class extent_client {
  public:
   extent_client();
 
-  extent_protocol::status create(uint32_t type, extent_protocol::extentid_t &eid);
+  extent_protocol::status create(uint32_t type, extent_protocol::extentid_t &eid, unsigned long long tid);
   extent_protocol::status get(extent_protocol::extentid_t eid, 
-			                        std::string &buf);
+			                        std::string &buf, unsigned long long tid);
   extent_protocol::status getattr(extent_protocol::extentid_t eid, 
-				                          extent_protocol::attr &a);
-  extent_protocol::status put(extent_protocol::extentid_t eid, std::string buf);
-  extent_protocol::status remove(extent_protocol::extentid_t eid);
+				                          extent_protocol::attr &a, unsigned long long tid);
+  extent_protocol::status put(extent_protocol::extentid_t eid, std::string buf, unsigned long long tid);
+  extent_protocol::status remove(extent_protocol::extentid_t eid, unsigned long long tid);
+  void begin_transaction(unsigned long long &tid);
+  void end_transaction(unsigned long long tid);
 };
 
 #endif 
