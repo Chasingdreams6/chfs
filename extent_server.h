@@ -25,11 +25,11 @@ class extent_server {
   FILE* debugfp;
  public:
   extent_server();
-  int create(uint32_t type, unsigned long long tid, extent_protocol::extentid_t &id);
-  int put(extent_protocol::extentid_t id, unsigned long long tid, std::string, int &);
-  int get(extent_protocol::extentid_t id, unsigned long long tid, std::string &);
-  int getattr(extent_protocol::extentid_t id, unsigned long long tid, extent_protocol::attr &);
-  int remove(extent_protocol::extentid_t id, unsigned long long tid, int &);
+  int create(int clt, uint32_t type, unsigned long long tid, extent_protocol::extentid_t &id);
+  int put(int clt, extent_protocol::extentid_t id, unsigned long long tid, std::string, int &);
+  int get(int clt, extent_protocol::extentid_t id, unsigned long long tid, std::string &);
+  int getattr(int clt, extent_protocol::extentid_t id, unsigned long long tid, extent_protocol::attr &);
+  int remove(int clt, extent_protocol::extentid_t id, unsigned long long tid, int &);
   void begin_transaction(unsigned long long &tid);
   void end_transaction(unsigned long long tid);
 

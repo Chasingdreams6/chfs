@@ -13,6 +13,7 @@
 #include "extent_server.h"
 #include "persister.h"
 #define EXTENT_DEBUG 0 
+#define LAB2A 0
 
 extent_server::extent_server() 
 {
@@ -24,7 +25,8 @@ extent_server::extent_server()
   }
   // Your code here for Lab2A: recover data on startup
   //_persister->restore_checkpoint();
-  _persister->restore_logdata();
+  if (LAB2A)
+    _persister->restore_logdata();
   std::map<unsigned long long, int> commited; commited.clear();
   for (chfs_command cmd : _persister->log_entries) {
     if (cmd.type == CMD_COMMIT) commited[cmd.id] = 1;
@@ -90,7 +92,7 @@ void extent_server::end_transaction(unsigned long long tid) {
   _persister->append_log(new chfs_command(CMD_COMMIT, tid));
 }
 
-int extent_server::create(uint32_t type, unsigned long long tid, extent_protocol::extentid_t &id)
+int extent_server::create(int clt, uint32_t type, unsigned long long tid, extent_protocol::extentid_t &id)
 {
   // alloc a new inode and return inum
   if (EXTENT_DEBUG)
@@ -106,7 +108,7 @@ int extent_server::create(uint32_t type, unsigned long long tid, extent_protocol
   return extent_protocol::OK;
 }
 
-int extent_server::put(extent_protocol::extentid_t id, unsigned long long tid, std::string buf, int &)
+int extent_server::put(int clt, extent_protocol::extentid_t id, unsigned long long tid, std::string buf, int &)
 {
   id &= 0x7fffffff;
   
@@ -124,7 +126,7 @@ int extent_server::put(extent_protocol::extentid_t id, unsigned long long tid, s
   return extent_protocol::OK;
 }
 
-int extent_server::get(extent_protocol::extentid_t id, unsigned long long tid, std::string &buf)
+int extent_server::get(int clt, extent_protocol::extentid_t id, unsigned long long tid, std::string &buf)
 {
   if (EXTENT_DEBUG)
     printf("extent_server: get %lld\n", id);
@@ -150,7 +152,7 @@ int extent_server::get(extent_protocol::extentid_t id, unsigned long long tid, s
   return extent_protocol::OK;
 }
 
-int extent_server::getattr(extent_protocol::extentid_t id, unsigned long long tid, extent_protocol::attr &a)
+int extent_server::getattr(int clt, extent_protocol::extentid_t id, unsigned long long tid, extent_protocol::attr &a)
 {
   if (EXTENT_DEBUG)
     printf("extent_server: getattr %lld\n", id);
@@ -170,7 +172,7 @@ int extent_server::getattr(extent_protocol::extentid_t id, unsigned long long ti
   return extent_protocol::OK;
 }
 
-int extent_server::remove(extent_protocol::extentid_t id, unsigned long long tid, int &)
+int extent_server::remove(int clt, extent_protocol::extentid_t id, unsigned long long tid, int &)
 {
   if (EXTENT_DEBUG)
     printf("extent_server: write %lld\n", id);
