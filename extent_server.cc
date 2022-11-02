@@ -12,21 +12,22 @@
 
 #include "extent_server.h"
 #include "persister.h"
-#define EXTENT_DEBUG 0 
+#define EXTENT_DEBUG 0
 #define LAB2A 0
 
 extent_server::extent_server() 
 {
   im = new inode_manager();
-  _persister = new chfs_persister("log"); // DO NOT change the dir name here
+  if (LAB2A)
+    _persister = new chfs_persister("log"); // DO NOT change the dir name here
   
   if (DEBUG_LAB2) {
     debugfp = fopen("readable-log.txt", "a+");
   }
   // Your code here for Lab2A: recover data on startup
   //_persister->restore_checkpoint();
-  if (LAB2A)
-    _persister->restore_logdata();
+  if (!LAB2A) return ; 
+  _persister->restore_logdata();
   std::map<unsigned long long, int> commited; commited.clear();
   for (chfs_command cmd : _persister->log_entries) {
     if (cmd.type == CMD_COMMIT) commited[cmd.id] = 1;
@@ -85,20 +86,23 @@ extent_server::extent_server()
 
 void extent_server::begin_transaction(unsigned long long &tid) {
   tid = time(NULL);
+  if (LAB2A)
   _persister->append_log(new chfs_command(CMD_BEGIN, tid));
 }
 
 void extent_server::end_transaction(unsigned long long tid) {
+  if (LAB2A)
   _persister->append_log(new chfs_command(CMD_COMMIT, tid));
 }
 
 int extent_server::create(int clt, uint32_t type, unsigned long long tid, extent_protocol::extentid_t &id)
 {
   // alloc a new inode and return inum
-  if (EXTENT_DEBUG)
-    printf("extent_server: create inode\n");
   id = im->lookup_inode();
-  _persister->append_log(new chfs_command(CMD_CREATE, tid, id, type));
+  if (EXTENT_DEBUG)
+    printf("extent_server: create inode %lld\n", id);
+  if (LAB2A)  
+    _persister->append_log(new chfs_command(CMD_CREATE, tid, id, type));
   if (DEBUG_LAB2) {
     fprintf(debugfp, "LOG: CREATE inum=%lld file_type=%d\n", id, type);
     fflush(debugfp);
@@ -112,9 +116,13 @@ int extent_server::put(int clt, extent_protocol::extentid_t id, unsigned long lo
 {
   id &= 0x7fffffff;
   
+  if (EXTENT_DEBUG)
+    printf("extent_server: put %lld\n", id);
+
   const char * cbuf = buf.c_str();
   int size = buf.size();
-  _persister->append_log(new chfs_command(CMD_PUT, tid, id, size, buf));
+  if (LAB2A)
+    _persister->append_log(new chfs_command(CMD_PUT, tid, id, size, buf));
   if (DEBUG_LAB2) {
     fprintf(debugfp, "LOG: PUT inum=%lld length=%d\n", id, size);
     if (DEBUG_LAB2 > 1) 
@@ -135,8 +143,8 @@ int extent_server::get(int clt, extent_protocol::extentid_t id, unsigned long lo
 
   int size = 0;
   char *cbuf = NULL;
-
-  _persister->append_log(new chfs_command(CMD_GET, tid, id));
+  if (LAB2A)
+    _persister->append_log(new chfs_command(CMD_GET, tid, id));
   if (DEBUG_LAB2) {
     fprintf(debugfp, "LOG: GET inum=%lld\n", id);
     fflush(debugfp);
@@ -161,7 +169,8 @@ int extent_server::getattr(int clt, extent_protocol::extentid_t id, unsigned lon
   
   extent_protocol::attr attr;
   memset(&attr, 0, sizeof(attr));
-  _persister->append_log(new chfs_command(CMD_GETATTR, tid, id));
+  if (LAB2A)
+    _persister->append_log(new chfs_command(CMD_GETATTR, tid, id));
   if (DEBUG_LAB2) {
     fprintf(debugfp, "LOG: GETATTR inum=%lld\n", id);
     fflush(debugfp);
@@ -175,10 +184,10 @@ int extent_server::getattr(int clt, extent_protocol::extentid_t id, unsigned lon
 int extent_server::remove(int clt, extent_protocol::extentid_t id, unsigned long long tid, int &)
 {
   if (EXTENT_DEBUG)
-    printf("extent_server: write %lld\n", id);
-
+    printf("extent_server: remove %lld\n", id);
   id &= 0x7fffffff;
-  _persister->append_log(new chfs_command(CMD_REMOVE, tid, id));
+  if (LAB2A)
+    _persister->append_log(new chfs_command(CMD_REMOVE, tid, id));
   if (DEBUG_LAB2) {
     fprintf(debugfp, "LOG: REMOVE inum=%lld\n", id);
     fflush(debugfp);

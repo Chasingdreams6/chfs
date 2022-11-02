@@ -22,6 +22,7 @@
 
 int myid;
 chfs_client *chfs;
+lock_client *lc;
 
 int id() { 
     return myid;
@@ -46,6 +47,8 @@ getattr(chfs_client::inum inum, struct stat &st)
 {
     chfs_client::status ret;
 
+    lc->acquire(inum);
+
     bzero(&st, sizeof(st));
 
     st.st_ino = inum;
@@ -54,7 +57,7 @@ getattr(chfs_client::inum inum, struct stat &st)
         chfs_client::fileinfo info;
         ret = chfs->getfile(inum, info);
         if(ret != chfs_client::OK)
-            return ret;
+            goto release;
         st.st_mode = S_IFREG | 0666;
         st.st_nlink = 1;
         st.st_atime = info.atime;
@@ -69,7 +72,7 @@ getattr(chfs_client::inum inum, struct stat &st)
         chfs_client::dirinfo info;
         ret = chfs->getdir(inum, info);
         if(ret != chfs_client::OK)
-            return ret;
+            goto release;
         st.st_mode = S_IFDIR | 0777;
         st.st_nlink = 2;
         st.st_atime = info.atime;
@@ -84,7 +87,7 @@ getattr(chfs_client::inum inum, struct stat &st)
         chfs_client::fileinfo info;
         ret = chfs->getfile(inum, info);
         if(ret != chfs_client::OK)
-            return ret;
+            goto release;
         //st.st_mode = 0120000 | 0777;
         st.st_mode = S_IFLNK | 0777;
         st.st_nlink = 1;
@@ -102,9 +105,12 @@ getattr(chfs_client::inum inum, struct stat &st)
             printf("getattr wrong type inum=%lld\n", inum);
             fflush(stdout);
         }
-        return chfs_client::IOERR;
+        ret = chfs_client::IOERR;
+        goto release;
     }
-    return chfs_client::OK;
+release:
+    lc->release(inum);
+    return ret;
 }
 
 //
@@ -166,16 +172,20 @@ fuseserver_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
     // Change the above line to "#if 1", and your code goes here
     // Note: fill st using getattr before fuse_reply_attr
     chfs_client::inum inum = ino;
+    lc->acquire(inum);
     int r = chfs->setattr(inum, attr->st_size);
     if (r != chfs_client::OK) {
+        lc->release(inum);
         fuse_reply_err(req, ENOENT);
         return;
     }
     r = getattr(inum, st);
     if (r != chfs_client::OK) {
+        lc->release(inum);
         fuse_reply_err(req, ENOENT);
         return;
     }
+    lc->release(inum);
     fuse_reply_attr(req, &st, 0);
 #else
     fuse_reply_err(req, ENOSYS);
@@ -205,11 +215,15 @@ fuseserver_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 #if 1
     // Change the above "#if 0" to "#if 1", and your code goes here
     chfs_client::inum inum = ino;
+    lc->acquire(inum);
     std::string data;
     int r = chfs->read(inum, size, off, data);
     if (r != chfs_client::OK) {
+        lc->release(inum);
         fuse_reply_err(req, EIO);
+        return ;
     }
+    lc->release(inum);
     fuse_reply_buf(req, data.data(), data.size());
 #else
     fuse_reply_err(req, ENOSYS);
@@ -241,11 +255,15 @@ fuseserver_write(fuse_req_t req, fuse_ino_t ino,
 #if 1
     // Change the above line to "#if 1", and your code goes here
     chfs_client::inum inum = ino;
+    lc->acquire(inum);
     size_t bytes_written = 0;
     int r = chfs->write(inum, size, off, buf, bytes_written);
     if (r != chfs_client::OK) {
+        lc->release(inum);
         fuse_reply_err(req, EIO);
+        return ;
     }
+    lc->release(inum);
     fuse_reply_write(req, bytes_written);
 #else
     fuse_reply_err(req, ENOSYS);
@@ -279,16 +297,19 @@ fuseserver_createhelper(fuse_ino_t parent, const char *name,
     e->attr_timeout = 0.0;
     e->entry_timeout = 0.0;
     e->generation = 0;
-
+    lc->acquire(parent);
     chfs_client::inum inum;
     if ( type == extent_protocol::T_FILE)
 		ret = chfs->create(parent, name, mode, inum);
     else
         ret = chfs->mkdir(parent, name, mode, inum);
-    if (ret != chfs_client::OK)
+    if (ret != chfs_client::OK) {
+        lc->release(parent);
         return ret;
+    }
     e->ino = inum;
     ret = getattr(inum, e->attr);
+    lc->release(parent);
     return ret;
 }
 
@@ -340,22 +361,27 @@ fuseserver_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     e.entry_timeout = 0.0;
     e.generation = 0;
     bool found = false;
-
+    lc->acquire(parent);
     chfs_client::inum ino;
     chfs->lookup(parent, name, found, ino);
 
     if (found) { // find a file
         e.ino = ino;
         getattr(ino, e.attr);
+        lc->release(parent);
         fuse_reply_entry(req, &e);
     } else { 
         chfs->lookupdir(parent, name, found, ino);
         if (found) { // find a dir
             e.ino = ino; // fuck this
             getattr(ino, e.attr);
+            lc->release(parent);
             fuse_reply_entry(req, &e);
         }
-        else  fuse_reply_err(req, ENOENT);
+        else  {
+            lc->release(parent);
+            fuse_reply_err(req, ENOENT);
+        }
     }
 
 }
@@ -404,10 +430,12 @@ fuseserver_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     chfs_client::inum inum = ino; // req->in.h.nodeid;
     struct dirbuf b;
 
+    lc->acquire(inum);
     if (FUSE_DEBUG)
     printf("fuseserver_readdir\n");
 
     if(!chfs->isdir(inum)){
+        lc->release(inum);
         fuse_reply_err(req, ENOTDIR);
         return;
     }
@@ -420,6 +448,7 @@ fuseserver_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
         dirbuf_add(&b, it->name.c_str(), (fuse_ino_t) it->inum);
     }
 
+    lc->release(inum);
     reply_buf_limited(req, b.p, b.size, off, size);
     free(b.p);
 }
@@ -458,12 +487,17 @@ fuseserver_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     // Change the above line to "#if 1", and your code goes here
     int r;
     chfs_client::inum inum;
+    lc->acquire(parent);
     r = chfs->mkdir(parent, name, mode, inum);
     if (r != chfs_client::OK) {
         if (r == chfs_client::EXIST) {
+            lc->release(parent);
             fuse_reply_err(req, EEXIST);
         }
-        else fuse_reply_err(req, ENOENT);
+        else {
+            lc->release(parent);
+            fuse_reply_err(req, ENOENT);
+        }
     }
     e->ino = inum;
     getattr(inum, e->attr);
@@ -471,6 +505,7 @@ fuseserver_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
         printf("fuse layer: created inum=%ld name=%s in parent=%ld\n", e->ino, name, parent);
         printf("fuse layer: called attr to get inum's attr\n");
     }
+    lc->release(parent);
     fuse_reply_entry(req, e);
 #else
     fuse_reply_err(req, ENOSYS);
@@ -489,12 +524,16 @@ void
 fuseserver_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
     int r;
+    lc->acquire(parent);
     if ((r = chfs->unlink(parent, name)) == chfs_client::OK) {
+        lc->release(parent);
         fuse_reply_err(req, 0);
     } else {
         if (r == chfs_client::NOENT) {
+            lc->release(parent);
             fuse_reply_err(req, ENOENT);
         } else {
+            lc->release(parent);
             fuse_reply_err(req, ENOTEMPTY);
         }
     }
@@ -506,12 +545,15 @@ void fuseserver_readlink(fuse_req_t req, fuse_ino_t ino)
 #if 1
     int r;
     std::string res;
+    lc->acquire(ino);
     r = chfs->readlink(ino, res);
     char* buf = (char *)malloc(res.length());
     strncpy(buf, res.c_str(), res.length());
     if (r != chfs_client::OK) {
+        lc->release(ino);
         fuse_reply_err(req, ENOENT);
     }   
+    lc->release(ino);
     fuse_reply_readlink(req, buf);
 #else
     fuse_reply_err(req, ENOSYS);
@@ -529,15 +571,17 @@ void fuseserver_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, con
     e.attr_timeout = 0.0;
     e.entry_timeout = 0.0;
     e.generation = 0;
-
+    lc->acquire(parent);
     chfs_client::inum inum;
     r = chfs->symlink(parent, link, name, inum);
     if (r != chfs_client::OK) {
+        lc->release(parent);
         fuse_reply_err(req, ENOENT);
         return ;
     }
     e.ino = inum;
     getattr(inum, e.attr);
+    lc->release(parent);
     fuse_reply_entry(req, &e);
 #else
     fuse_reply_err(req, ENOSYS);
@@ -607,6 +651,7 @@ main(int argc, char *argv[])
 
     chfs = new chfs_client(argv[2], argv[3]);
     //chfs = new chfs_client();
+    lc = new lock_client(argv[3]);
 
     fuseserver_oper.getattr    = fuseserver_getattr;
     fuseserver_oper.statfs     = fuseserver_statfs;

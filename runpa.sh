@@ -1,6 +1,5 @@
-./clean.sh
 make clean
 make
-./start.sh
-./test-lab2a-part1-a.pl chfs1
 ./stop.sh
+./start.sh
+./test-lab2b-part3-a ./chfs1 ./chfs2

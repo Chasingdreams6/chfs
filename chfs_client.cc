@@ -34,7 +34,8 @@
 chfs_client::chfs_client(std::string extent_dst, std::string lock_dst)
 {
     ec = new extent_client(extent_dst);
-    lc = new lock_client(lock_dst);
+    //lc = new lock_client(lock_dst);
+    printf("chfs_client:: mount to %s\n", extent_dst.c_str());
     unsigned long long tid;
     ec->begin_transaction(tid);
     if (ec->put(1, "", tid) != extent_protocol::OK)
@@ -70,7 +71,7 @@ chfs_client::isfile(inum inum)
     unsigned long long tid;
     ec->begin_transaction(tid);
     if (ec->getattr(inum, a, tid) != extent_protocol::OK) {
-        printf("error getting attr\n");
+        printf("error getting attr inum=%lld\n", inum);
         return false;
     }
     ec->end_transaction(tid);

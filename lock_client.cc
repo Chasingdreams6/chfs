@@ -14,7 +14,7 @@ lock_client::lock_client(std::string dst)
   make_sockaddr(dst.c_str(), &dstsock);
   cl = new rpcc(dstsock);
   if (cl->bind() < 0) {
-    printf("lock_client: call bind\n");
+    printf("lock_client: call bind failed\n");
   }
 }
 
