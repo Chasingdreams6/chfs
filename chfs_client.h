@@ -49,7 +49,7 @@ class chfs_client {
 
   int setattr(inum, size_t);
   int lookup(inum, const char *, bool &, inum &);
-  int lookupdir(inum, const char *, bool &, inum &);
+  //int lookupdir(inum, const char *, bool &, inum &);
   int create(inum, const char *, mode_t, inum &);
   int readdir(inum, std::list<dirent> &);
   int write(inum, size_t, off_t, const char *, size_t &);
@@ -59,6 +59,8 @@ class chfs_client {
 
   int symlink(inum, const char*, const char*, inum &);
   int readlink(inum, std::string &);
+  void acquire(lock_protocol::lockid_t);
+  void release(lock_protocol::lockid_t);
   
   /** you may need to add symbolic link related methods here.*/
 };

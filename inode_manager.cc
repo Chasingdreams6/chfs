@@ -85,6 +85,7 @@ block_manager::alloc_block()
    * you need to think about which block you can start to be allocated.
    */
   // char curBlock[BLOCK_SIZE]; // buffer
+  mx.lock();
   blockid_t startBlock = IBLOCK(INODE_NUM, sb.nblocks) + 1; // the first block can be used
   while (startBlock < BLOCK_NUM) {
     // if (using_blocks.find(startBlock) != using_blocks.end()) { // double check
@@ -103,12 +104,11 @@ block_manager::alloc_block()
     break;
   }
   if (startBlock == BLOCK_NUM) {
-      printf("fatal error: block used up");
-      fflush(stdout);
       if (DEBUG_MODE > 1) {
-        outfile << "fatal error: block used up\n";
+        outfile << "BM-allok_block: fatal error: block used up\n";
         outfile.flush();
       }
+      mx.unlock();
       return 0;
   }
   //using_blocks[startBlock] = 1; // set using_blocks to 1
@@ -118,9 +118,10 @@ block_manager::alloc_block()
   // d->write_block(BBLOCK(startBlock), curBlock);
   d->set_bit_one(BBLOCK(startBlock), BITMAP_BIOS(startBlock), BIT_SHIFT(startBlock));
   if (DEBUG_MODE > 1) {
-    outfile << "alloc_block id=" << startBlock << "\n";
+    outfile << "BM-alloc_block: bid=" << startBlock << "\n";
     outfile.flush();
   }
+  mx.unlock();
   return startBlock;
 }
 
@@ -131,15 +132,23 @@ block_manager::free_block(uint32_t id)
    * your code goes here.
    * note: you should unmark the corresponding bit in the block bitmap when free.
    */
-  if (id >= BLOCK_NUM) return; // out of range
+  mx.lock();
+  if (id >= BLOCK_NUM) {
+    mx.unlock();
+    return; // out of range
+  }
   // if (using_blocks.find(id) == using_blocks.end()) return ; // the block is not used
   // using_blocks.erase(id);
-  if (!d->read_bit(BBLOCK(id), BITMAP_BIOS(id), BIT_SHIFT(id))) return ; // not used
+  if (!d->read_bit(BBLOCK(id), BITMAP_BIOS(id), BIT_SHIFT(id))){
+    mx.unlock();
+    return ; // not used
+  } 
   d->set_bit_zero(BBLOCK(id), BITMAP_BIOS(id), BIT_SHIFT(id));
   // char curBlock[BLOCK_SIZE];
   // d->read_block(BBLOCK(id), curBlock);
   // curBlock[BITMAP_BIOS(id)] &= SHIFTED_0(id); // set bitmap to 0
   // d->write_block(BBLOCK(id), curBlock);
+  mx.unlock();
   return;
 }
 
@@ -174,21 +183,19 @@ inode_manager::inode_manager()
 {
   bm = new block_manager();
   uint32_t root_dir = alloc_inode(extent_protocol::T_DIR);
+  if (DEBUG_MODE) 
+    outfile.open(log_dst.c_str(), std::ios::out);
   if (root_dir != 1) {
-    printf("\tim: error! alloc first inode %d, should be 1\n", root_dir);
-    fflush(stdout);
     if (DEBUG_MODE) {
-      outfile << "im: error! alloc first inode " << root_dir << ", should be 1\n" << std::endl;
+      outfile << "IM-construct: error! alloc first inode " << root_dir << ", should be 1\n" << std::endl;
       outfile.flush();
     }
     exit(0);
   }
-  if (DEBUG_MODE) {
-    outfile.open(log_dst.c_str(), std::ios::out);
-  }
 }
 
 inode_manager::~inode_manager() {
+  if (DEBUG_MODE)
     outfile.close();
 }
 
@@ -207,6 +214,7 @@ inode_manager::alloc_inode(uint32_t type)
    * note: the normal inode block should begin from the 2nd inode block.
    * the 1st is used for root_dir, see inode_manager::inode_manager().
    */
+  inode_mx.lock();
   uint32_t inum = 1; // start from 1
   struct inode* ino;
   while (inum < INODE_NUM) {
@@ -216,17 +224,20 @@ inode_manager::alloc_inode(uint32_t type)
             && ino->type != extent_protocol::T_SYM) break;
     inum++;
   }
-  if (inum == INODE_NUM) return 0; // alloc fail
+  if (inum == INODE_NUM) {
+    inode_mx.unlock();
+    return 0; // alloc fail
+  }
   ino->type = type;
   ino->size = 0;
   ino->atime = ino->ctime = ino->mtime = getTimeNs();
   put_inode(inum, ino);
-  printf("alloc_inode: inum=%d\n", inum);
-  fflush(stdout);
+
   if (DEBUG_MODE) {
     outfile << "alloc_inode: " << inum << std::endl;
     outfile.flush();
   }
+  inode_mx.unlock();
   return inum;
 }
 
@@ -234,6 +245,7 @@ inode_manager::alloc_inode(uint32_t type)
 uint32_t 
 inode_manager::lookup_inode() 
 {
+  inode_mx.lock();
   uint32_t inum = 1; // start from 1
   struct inode* ino;
   while (inum < INODE_NUM) {
@@ -243,6 +255,7 @@ inode_manager::lookup_inode()
             && ino->type != extent_protocol::T_SYM) break;
     inum++;
   }
+  inode_mx.unlock();
   if (inum == INODE_NUM) return 0; // alloc fail
   return inum;
 }
@@ -250,11 +263,13 @@ inode_manager::lookup_inode()
 void
 inode_manager::assign_inode(uint32_t inum, uint32_t type) 
 {
+    inode_mx.lock();
     struct inode* ino = get_inode(inum);
     ino->type = type;
     ino->size = 0;
     ino->atime = ino->ctime = ino->mtime = getTimeNs();
     put_inode(inum, ino);
+    inode_mx.unlock();
 }
 
 void
@@ -265,20 +280,23 @@ inode_manager::free_inode(uint32_t inum)
    * note: you need to check if the inode is already a freed one;
    * if not, clear it, and remember to write back to disk.
    */
+  inode_mx.lock();
   struct inode* ino = get_inode(inum);
   if (ino->type != extent_protocol::T_DIR 
         && ino->type != extent_protocol::T_FILE 
-        && ino->type != extent_protocol::T_SYM) return ; // already deleted
+        && ino->type != extent_protocol::T_SYM) {
+          inode_mx.unlock();
+          return ; // already deleted
+  }
   ino->type = 0; // type设置为0表示删除了
   ino->size = 0;
   ino->atime = ino->ctime = ino->mtime = getTimeNs();
   put_inode(inum, ino);
-  printf("free_inode: inum=%d\n", inum);
-  fflush(stdout);
   if (DEBUG_MODE) {
-    outfile << "free_inode: " << inum << std::endl;
+    outfile << "IM-free_inode: inum=" << inum << std::endl;
     outfile.flush();
   }
+  inode_mx.unlock();
   return;
 }
 
@@ -286,7 +304,7 @@ inode_manager::free_inode(uint32_t inum)
 /* Return an inode structure by inum, NULL otherwise.
  * Caller should release the memory. */
 /*
-  从disk上读取到inode，深copy
+  从disk上读取到inode，赋值copy
 */
 struct inode* 
 inode_manager::get_inode(uint32_t inum)
@@ -315,13 +333,13 @@ inode_manager::put_inode(uint32_t inum, struct inode *ino)
 {
   char buf[BLOCK_SIZE];
   struct inode *ino_disk;
-
-  printf("\tim: put_inode %d\n", inum);
-  fflush(stdout);
   //printf("\tim: put_inode inum=%d size=%d\n", inum, ino->size);
   if (ino == NULL)
     return;
-
+  if (DEBUG_MODE > 1) {
+    outfile << "IM-put_inode: inum=" << inum << std::endl;
+    outfile.flush();
+  }
   bm->read_block(IBLOCK(inum, bm->sb.nblocks), buf);
   ino_disk = (struct inode*)buf + inum%IPB;
   ino->ctime = ino->mtime = ino->atime = getTimeNs();
@@ -356,7 +374,7 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
    */
   struct inode *ino = get_inode(inum);
   if (DEBUG_MODE) {
-    outfile << "read file inum=" << inum << " size=" << ino->size << "\n";
+    outfile << "IM-read_file inum=" << inum << " size=" << ino->size << "\n";
     outfile.flush();
   }
   int block_needed = ino->size / BLOCK_SIZE;
@@ -368,7 +386,7 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
      for (int i = 0; i < block_needed; ++i) {
         blockid_t id = ino->blocks[i]; // 第id个block
         if (DEBUG_MODE > 1) {
-          outfile << "read block id=" << id << "\n";
+          outfile << "IM-read_file block bid=" << id << "\n";
           outfile.flush();
         }
         bm->read_block(id, &res[i * BLOCK_SIZE]);
@@ -378,7 +396,7 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
     for (int i = 0; i < NDIRECT; ++i) {
         blockid_t id = ino->blocks[i]; // 第id个block
         if (DEBUG_MODE > 1) {
-          outfile << "read block id=" << id << "\n";
+          outfile << "IM-read_file block bid=" << id << "\n";
           outfile.flush();
         }
         bm->read_block(id, &res[i * BLOCK_SIZE]);
@@ -392,7 +410,7 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
         blockid_t id;
         read_int_from_buf(bufx, i - NDIRECT, id);
         if (DEBUG_MODE > 1) {
-          outfile << "read block id=" << id << "\n";
+          outfile << "IM-read_file block bid=" << id << "\n";
           outfile.flush();
         }
         bm->read_block(id, &res[i * BLOCK_SIZE]);
@@ -418,10 +436,8 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
    * you need to consider the situation when the size of buf 
    * is larger or smaller than the size of original inode
    */
-  printf("im write file: inum=%d size=%d \n", inum, size);
-  fflush(stdout);
   if (DEBUG_MODE) {
-    outfile << "im write file: inum=" << inum << " size=" << size << "\n";
+    outfile << "IM-write_file: inum=" << inum << " size=" << size << "\n";
     outfile.flush();
   }
   struct inode *ino = get_inode(inum);
@@ -433,7 +449,7 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
       for (int i = 0; i < last_block; ++i) {
         uint32_t block_id = ino->blocks[i];
         if (DEBUG_MODE > 1) {
-          outfile << "free block id=" << block_id << "\n";
+          outfile << "IM-write free block bid=" << block_id << "\n";
           outfile.flush();
         }
         bm->free_block(block_id);
@@ -444,7 +460,7 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
       for (int i = 0; i < NDIRECT; ++i) {
         uint32_t block_id = ino->blocks[i];
         if (DEBUG_MODE > 1) {
-          outfile << "free block id=" << block_id << "\n";
+          outfile << "IM-write free block bid=" << block_id << "\n";
           outfile.flush();
         }
         bm->free_block(block_id);
@@ -458,13 +474,13 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
           blockid_t id;
           read_int_from_buf(bufx, i - NDIRECT, id);
           if (DEBUG_MODE > 1) {
-            outfile << "free block id=" << id << "\n";
+            outfile << "IM-write free block bid=" << id << "\n";
             outfile.flush();
           }
           bm->free_block(id);
       }
       if (DEBUG_MODE > 1) {
-          outfile << "free indirect block id=" << indirectBlockID << "\n";
+          outfile << "IM-write free indirect block bid=" << indirectBlockID << "\n";
           outfile.flush();
       }
       bm->free_block(indirectBlockID);
@@ -483,7 +499,7 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
     for (int i = 0; i < block_needed - 1; ++i) {
       uint32_t block_id = bm->alloc_block();
       if (DEBUG_MODE > 1) {
-          outfile << "write filled block id=" << block_id << "\n";
+          outfile << "IM-write write filled block bid=" << block_id << "\n";
           outfile.flush();
       }
       bm->write_block(block_id, &buf[i * BLOCK_SIZE]);
@@ -494,7 +510,7 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
         char tmp[BLOCK_SIZE];
         memcpy(tmp, &buf[(block_needed - 1) * BLOCK_SIZE], lastlen);
         if (DEBUG_MODE > 1) {
-          outfile << "write unfilled block id=" << block_id << " len=" << lastlen << "\n";
+          outfile << "IM-write write unfilled block bid=" << block_id << " len=" << lastlen << "\n";
           outfile.flush();
         }
         bm->write_block(block_id, tmp);
@@ -505,7 +521,7 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
     for (int i = 0; i < NDIRECT; ++i) { 
       uint32_t block_id = bm->alloc_block();
       if (DEBUG_MODE > 1) {
-          outfile << "write filled block id=" << block_id << "\n";
+          outfile << "IM-write write filled block bid=" << block_id << "\n";
           outfile.flush();
       }
       bm->write_block(block_id, &buf[i * BLOCK_SIZE]);
@@ -519,7 +535,7 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
       bm->write_block(block_id, &buf[i * BLOCK_SIZE]);
       write_int_to_buf(bufx, i - NDIRECT, block_id);
       if (DEBUG_MODE > 1) {
-          outfile << "write filled block id=" << block_id << "\n";
+          outfile << "IM-write write filled block bid=" << block_id << "\n";
           outfile.flush();
       }
     }
@@ -530,7 +546,7 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
         bm->write_block(block_id, tmp);
         write_int_to_buf(bufx, block_needed - 1 - NDIRECT, block_id);
         if (DEBUG_MODE > 1) {
-          outfile << "write unfilled block id=" << block_id << " len=" << lastlen << "\n";
+          outfile << "IM-write write unfilled block bid=" << block_id << " len=" << lastlen << "\n";
           outfile.flush();
         }
     }

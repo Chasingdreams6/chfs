@@ -1,3 +1,4 @@
+./clean.sh
 make clean
 make
 ./stop.sh

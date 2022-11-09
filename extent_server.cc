@@ -13,7 +13,7 @@
 #include "extent_server.h"
 #include "persister.h"
 #define EXTENT_DEBUG 0
-#define LAB2A 0
+#define LAB2A 1
 
 extent_server::extent_server() 
 {
@@ -87,12 +87,12 @@ extent_server::extent_server()
 void extent_server::begin_transaction(unsigned long long &tid) {
   tid = time(NULL);
   if (LAB2A)
-  _persister->append_log(new chfs_command(CMD_BEGIN, tid));
+    _persister->append_log(new chfs_command(CMD_BEGIN, tid));
 }
 
 void extent_server::end_transaction(unsigned long long tid) {
   if (LAB2A)
-  _persister->append_log(new chfs_command(CMD_COMMIT, tid));
+    _persister->append_log(new chfs_command(CMD_COMMIT, tid));
 }
 
 int extent_server::create(int clt, uint32_t type, unsigned long long tid, extent_protocol::extentid_t &id)
@@ -143,8 +143,8 @@ int extent_server::get(int clt, extent_protocol::extentid_t id, unsigned long lo
 
   int size = 0;
   char *cbuf = NULL;
-  if (LAB2A)
-    _persister->append_log(new chfs_command(CMD_GET, tid, id));
+  // if (LAB2A)
+  //   _persister->append_log(new chfs_command(CMD_GET, tid, id));
   if (DEBUG_LAB2) {
     fprintf(debugfp, "LOG: GET inum=%lld\n", id);
     fflush(debugfp);
@@ -169,8 +169,8 @@ int extent_server::getattr(int clt, extent_protocol::extentid_t id, unsigned lon
   
   extent_protocol::attr attr;
   memset(&attr, 0, sizeof(attr));
-  if (LAB2A)
-    _persister->append_log(new chfs_command(CMD_GETATTR, tid, id));
+  // if (LAB2A)
+  //   _persister->append_log(new chfs_command(CMD_GETATTR, tid, id));
   if (DEBUG_LAB2) {
     fprintf(debugfp, "LOG: GETATTR inum=%lld\n", id);
     fflush(debugfp);

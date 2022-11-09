@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include "extent_protocol.h"
+#include <mutex>
 
 #define DISK_SIZE  1024*1024*16
 #define BLOCK_SIZE 512
@@ -39,6 +40,7 @@ class block_manager {
   std::map <uint32_t, int> using_blocks;
   block_manager();
   struct superblock sb;
+  std::mutex mx;
 
   uint32_t alloc_block();
   void free_block(uint32_t id);
@@ -81,7 +83,7 @@ private:
   block_manager *bm;
   struct inode* get_inode(uint32_t inum);
   void put_inode(uint32_t inum, struct inode *ino);
-
+  std::mutex inode_mx;
  public:
   ~inode_manager();
   inode_manager();

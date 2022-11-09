@@ -166,9 +166,6 @@ persister<command>::persister(const std::string& dir){
     file_path_logfile = file_dir + "/logdata.bin";
     if (TRANS_DEBUG)
         trans_ptr = fopen("trans.log", "ab+");
-    // clean log
-    //log_ptr = fopen(file_path_logfile.data(), "rb+");
-    //fclose(log_ptr);
 }
 
 template<typename command>
@@ -183,9 +180,10 @@ void persister<command>::append_log(command* log) {
     // Your code here for lab2A
     //log_ptr = fopen(file_path_logfile.data(), "ab+");
     log_ptr = fopen(file_path_checkpoint.data(), "ab+");
+    if (log_ptr < 0) return ;
     cur_logsize += log->getsize();
     log->toString(log_ptr);
-    fflush(log_ptr);
+    //fflush(log_ptr);
     fclose(log_ptr);
     //if (cur_logsize > MAX_LOG_SZ) checkpoint(); // do the checkpoint
 }
