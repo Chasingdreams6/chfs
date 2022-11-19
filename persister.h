@@ -179,12 +179,17 @@ template<typename command>
 void persister<command>::append_log(command* log) {
     // Your code here for lab2A
     //log_ptr = fopen(file_path_logfile.data(), "ab+");
+    mtx.lock();
     log_ptr = fopen(file_path_checkpoint.data(), "ab+");
-    if (log_ptr < 0) return ;
+    if (log_ptr < 0) {
+        mtx.unlock();
+        return ;
+    }
     cur_logsize += log->getsize();
     log->toString(log_ptr);
     //fflush(log_ptr);
     fclose(log_ptr);
+    mtx.unlock();
     //if (cur_logsize > MAX_LOG_SZ) checkpoint(); // do the checkpoint
 }
 

@@ -27,6 +27,7 @@ extent_server::extent_server()
   // Your code here for Lab2A: recover data on startup
   //_persister->restore_checkpoint();
   if (!LAB2A) return ; 
+  /*
   _persister->restore_logdata();
   std::map<unsigned long long, int> commited; commited.clear();
   for (chfs_command cmd : _persister->log_entries) {
@@ -82,6 +83,7 @@ extent_server::extent_server()
         default: break;
       }
   }
+  */
 }
 
 void extent_server::begin_transaction(unsigned long long &tid) {

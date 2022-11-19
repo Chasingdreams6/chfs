@@ -489,7 +489,9 @@ fuseserver_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
     int r;
     chfs->acquire(parent);
-    if ((r = chfs->unlink(parent, name)) == chfs_client::OK) {
+    r = chfs->unlink(parent, name);
+    chfs->release(parent);
+    if (r == chfs_client::OK) {
         fuse_reply_err(req, 0);
     } else {
         if (r == chfs_client::NOENT) {
@@ -498,7 +500,6 @@ fuseserver_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
             fuse_reply_err(req, ENOTEMPTY);
         }
     }
-    chfs->release(parent);
 }
 
 /*read the link "path", and put the true destination to buf*/

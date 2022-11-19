@@ -85,7 +85,7 @@ block_manager::alloc_block()
    * you need to think about which block you can start to be allocated.
    */
   // char curBlock[BLOCK_SIZE]; // buffer
-  mx.lock();
+  //mx.lock();
   blockid_t startBlock = IBLOCK(INODE_NUM, sb.nblocks) + 1; // the first block can be used
   while (startBlock < BLOCK_NUM) {
     // if (using_blocks.find(startBlock) != using_blocks.end()) { // double check
@@ -108,7 +108,7 @@ block_manager::alloc_block()
         outfile << "BM-allok_block: fatal error: block used up\n";
         outfile.flush();
       }
-      mx.unlock();
+      //mx.unlock();
       return 0;
   }
   //using_blocks[startBlock] = 1; // set using_blocks to 1
@@ -121,7 +121,7 @@ block_manager::alloc_block()
     outfile << "BM-alloc_block: bid=" << startBlock << "\n";
     outfile.flush();
   }
-  mx.unlock();
+  //mx.unlock();
   return startBlock;
 }
 
@@ -132,15 +132,15 @@ block_manager::free_block(uint32_t id)
    * your code goes here.
    * note: you should unmark the corresponding bit in the block bitmap when free.
    */
-  mx.lock();
+  //mx.lock();
   if (id >= BLOCK_NUM) {
-    mx.unlock();
+    //mx.unlock();
     return; // out of range
   }
   // if (using_blocks.find(id) == using_blocks.end()) return ; // the block is not used
   // using_blocks.erase(id);
   if (!d->read_bit(BBLOCK(id), BITMAP_BIOS(id), BIT_SHIFT(id))){
-    mx.unlock();
+    //mx.unlock();
     return ; // not used
   } 
   d->set_bit_zero(BBLOCK(id), BITMAP_BIOS(id), BIT_SHIFT(id));
@@ -148,7 +148,7 @@ block_manager::free_block(uint32_t id)
   // d->read_block(BBLOCK(id), curBlock);
   // curBlock[BITMAP_BIOS(id)] &= SHIFTED_0(id); // set bitmap to 0
   // d->write_block(BBLOCK(id), curBlock);
-  mx.unlock();
+  //mx.unlock();
   return;
 }
 
@@ -214,7 +214,7 @@ inode_manager::alloc_inode(uint32_t type)
    * note: the normal inode block should begin from the 2nd inode block.
    * the 1st is used for root_dir, see inode_manager::inode_manager().
    */
-  inode_mx.lock();
+  //inode_mx.lock();
   uint32_t inum = 1; // start from 1
   struct inode* ino;
   while (inum < INODE_NUM) {
@@ -225,7 +225,7 @@ inode_manager::alloc_inode(uint32_t type)
     inum++;
   }
   if (inum == INODE_NUM) {
-    inode_mx.unlock();
+    //inode_mx.unlock();
     return 0; // alloc fail
   }
   ino->type = type;
@@ -237,7 +237,7 @@ inode_manager::alloc_inode(uint32_t type)
     outfile << "alloc_inode: " << inum << std::endl;
     outfile.flush();
   }
-  inode_mx.unlock();
+  //inode_mx.unlock();
   return inum;
 }
 
@@ -245,7 +245,7 @@ inode_manager::alloc_inode(uint32_t type)
 uint32_t 
 inode_manager::lookup_inode() 
 {
-  inode_mx.lock();
+  //inode_mx.lock();
   uint32_t inum = 1; // start from 1
   struct inode* ino;
   while (inum < INODE_NUM) {
@@ -255,7 +255,7 @@ inode_manager::lookup_inode()
             && ino->type != extent_protocol::T_SYM) break;
     inum++;
   }
-  inode_mx.unlock();
+  //inode_mx.unlock();
   if (inum == INODE_NUM) return 0; // alloc fail
   return inum;
 }
@@ -263,13 +263,13 @@ inode_manager::lookup_inode()
 void
 inode_manager::assign_inode(uint32_t inum, uint32_t type) 
 {
-    inode_mx.lock();
+    //inode_mx.lock();
     struct inode* ino = get_inode(inum);
     ino->type = type;
     ino->size = 0;
     ino->atime = ino->ctime = ino->mtime = getTimeNs();
     put_inode(inum, ino);
-    inode_mx.unlock();
+    //inode_mx.unlock();
 }
 
 void
@@ -280,12 +280,12 @@ inode_manager::free_inode(uint32_t inum)
    * note: you need to check if the inode is already a freed one;
    * if not, clear it, and remember to write back to disk.
    */
-  inode_mx.lock();
+  //inode_mx.lock();
   struct inode* ino = get_inode(inum);
   if (ino->type != extent_protocol::T_DIR 
         && ino->type != extent_protocol::T_FILE 
         && ino->type != extent_protocol::T_SYM) {
-          inode_mx.unlock();
+          //inode_mx.unlock();
           return ; // already deleted
   }
   ino->type = 0; // type设置为0表示删除了
@@ -296,7 +296,7 @@ inode_manager::free_inode(uint32_t inum)
     outfile << "IM-free_inode: inum=" << inum << std::endl;
     outfile.flush();
   }
-  inode_mx.unlock();
+  //inode_mx.unlock();
   return;
 }
 
