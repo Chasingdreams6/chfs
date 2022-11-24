@@ -1,31 +1,33 @@
 #include "raft_protocol.h"
 
 marshall &operator<<(marshall &m, const request_vote_args &args) {
-    // Lab3: Your code here
+    m << args.term << args.candidateId << args.lastLogIndex << args.lastLogTerm;
     return m;
 }
 unmarshall &operator>>(unmarshall &u, request_vote_args &args) {
-    // Lab3: Your code here
+    u >> args.term >> args.candidateId >> args.lastLogIndex >> args.lastLogTerm;
     return u;
 }
 
 marshall &operator<<(marshall &m, const request_vote_reply &reply) {
-    // Lab3: Your code here
+    m << reply.currentTerm << reply.voteGranted;
     return m;
 }
 
 unmarshall &operator>>(unmarshall &u, request_vote_reply &reply) {
-    // Lab3: Your code here
+    u >> reply.currentTerm >> reply.voteGranted;
     return u;
 }
 
 marshall &operator<<(marshall &m, const append_entries_reply &args) {
     // Lab3: Your code here
+    m << args.term << args.success;
     return m;
 }
 
 unmarshall &operator>>(unmarshall &m, append_entries_reply &args) {
     // Lab3: Your code here
+    m >> args.term >> args.success;
     return m;
 }
 

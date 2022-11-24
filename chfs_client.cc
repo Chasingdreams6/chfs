@@ -23,11 +23,11 @@
     } \
 } while (0)
 
-chfs_client::chfs_client()
-{
-    ec = new extent_client();
+// chfs_client::chfs_client()
+// {
+//     ec = new extent_client();
 
-}
+// }
 
 chfs_client::chfs_client(std::string extent_dst)
 {
