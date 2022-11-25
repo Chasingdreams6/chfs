@@ -16,7 +16,7 @@
 #include "raft_protocol.h"
 #include "raft_state_machine.h"
 
-const int DEBUG_MODE = 1;
+const int DEBUG_MODE = 0;
 const int DEBUG_PART2 = 1;
 
 template<typename state_machine, typename command>
@@ -270,17 +270,23 @@ bool raft<state_machine, command>::new_command(command cmd, int &term, int &inde
     term = current_term;
     log.push_back(log_entry<command>(cmd, current_term));
     index = log.size() - 1;
+    nextIndex.clear();
+    nextIndex.resize(num_nodes(), index);
+    mtx.unlock();
     if (DEBUG_PART2)
-        RAFT_LOG("add log to leader %d", my_id)
-    while (1) {
-        if (lastApplied >= index) {
-            mtx.unlock();
-            return true;
-        }
-        mtx.unlock();
-        my_mssleep(300);
-        mtx.lock();
-    }
+        RAFT_LOG("add log to leader %d", my_id);
+    return true; // return right now
+
+//    while (1) {
+//        if (commitIndex >= index) {
+//            if (DEBUG_PART2)
+//                RAFT_LOG("return to client commitIndex = %d", commitIndex)
+//            return true;
+//        }
+//        //mtx.unlock();
+//        //my_mssleep(500);
+//        //mtx.lock();
+//    }
 
 }
 
@@ -389,6 +395,9 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
         leader_id = arg.leaderId;
         votedFor = -1;
         votes.clear();
+        if (arg.leaderCommit <= log.size() - 1) { // had duplicated in log
+            commitIndex = arg.leaderCommit;
+        }
         if (arg.leaderId != my_id) { // got heartbeat from other, down to follower
             role = follower;
             //votes.clear();
@@ -425,7 +434,7 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
         }
     } else { // loss big
         if (DEBUG_PART2)
-            RAFT_LOG("follower's log is too short");
+            RAFT_LOG("follower's log is too short, it's %d, but leader at least %d", log.size() - 1, arg.prevLogIndex);
         reply.success = false;
     }
     reply.success = false;
@@ -457,11 +466,11 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
     }
     if (reply.success) { // success to append
         if (DEBUG_PART2)
-            RAFT_LOG("success to append, add matchindex[%d]", node)
+            RAFT_LOG("success to append, add matchindex[%d] to %d", node, arg.prevLogIndex + arg.entries.size());
         matchIndex[node] = arg.prevLogIndex + arg.entries.size();
     } else { // fail to append
         if (DEBUG_PART2)
-            RAFT_LOG("fail to append, decrease nextIndex[%d]", node)
+            RAFT_LOG("fail to append, decrease nextIndex[%d] to %d", node, nextIndex[node] - 1)
         nextIndex[node]--;
     }
     mtx.unlock();
@@ -585,36 +594,26 @@ void raft<state_machine, command>::run_background_commit() {
         if (is_stopped()) return;
         // Lab3: Your code here
         mtx.lock();
-        if (role == leader) {
+        if (role == leader && commitIndex < log.size() - 1) {
             int nums = num_nodes();
             for (int target = 0; target < nums; ++target) {
                 // construct args
                 if (target == my_id) continue;
-                if (log.size() <= 1 || matchIndex[target] > log.size() - 1) continue;
+                if (log.size() <= 1 || matchIndex[target] >= log.size() - 1) continue;
                 append_entries_args<command> args;
                 args.term = current_term;
                 args.leaderId = my_id;
                 args.leaderCommit = commitIndex;
-                args.prevLogTerm = log.back().term;
-                args.prevLogIndex = log.size() - 1;
+                args.prevLogTerm = log[log.size() - 2].term;
+                args.prevLogIndex = (log.size() -2);
                 for (int i = nextIndex[target]; i <= log.size() - 1; ++i) {
                     args.entries.push_back(log[i]);
                 }
                 thread_pool->addObjJob(this, &raft::send_append_entries, target, args);
             }
-
-            mtx.unlock();
-            my_mssleep(500);
-            mtx.lock();
-            // test result
-            std::vector<int> tmp(matchIndex);
-            std::sort(tmp.begin(), tmp.end());
-            if (DEBUG_PART2)
-                RAFT_LOG("leader's commitIndex to %d", tmp[num_nodes() / 2])
-            commitIndex = tmp[num_nodes() / 2];
         }
         mtx.unlock();
-        my_mssleep(200);
+        my_mssleep(100);
     }
 
 }
@@ -629,12 +628,23 @@ void raft<state_machine, command>::run_background_apply() {
         if (is_stopped()) return;
         // Lab3: Your code here:
         mtx.lock();
+        if (role == leader && commitIndex < log.size() - 1) {
+            // test result
+            std::vector<int> tmp(matchIndex);
+            std::sort(tmp.begin(), tmp.end());
+            if (DEBUG_PART2)
+                RAFT_LOG("leader's commitIndex to %d", tmp[num_nodes() / 2])
+            commitIndex = tmp[num_nodes() / 2];
+        }
         while (lastApplied < commitIndex) {
+            if (DEBUG_PART2)
+                RAFT_LOG("commitIndex = %d, lastAppied = %d", commitIndex, lastApplied)
+            assert(&log[lastApplied + 1].cmd != nullptr);
             state->apply_log(log[lastApplied + 1].cmd);
             lastApplied++;
         }
         mtx.unlock();
-        my_mssleep(300);
+        my_mssleep(50);
     }    
 
     return;
@@ -657,6 +667,7 @@ void raft<state_machine, command>::run_background_ping() {
             append_entries_args<command> args;
             args.term = current_term;
             args.leaderId = my_id;
+            args.leaderCommit = commitIndex;
             for (int target = 0; target < nums; ++target) { // include send ping to myself
                 thread_pool->addObjJob(this, &raft::send_append_entries, target, args);
             }
