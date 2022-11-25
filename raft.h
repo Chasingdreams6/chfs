@@ -16,7 +16,7 @@
 #include "raft_protocol.h"
 #include "raft_state_machine.h"
 
-const int DEBUG_MODE = 1;
+const int DEBUG_MODE = 0;
 const int DEBUG_PART2 = 1;
 
 template<typename state_machine, typename command>
@@ -701,7 +701,7 @@ template<typename state_machine, typename command>
 bool raft<state_machine, command>::should_down_myself() {
     ms_t cur = getCurrentTime();
     auto dur = cur - lastHeartBeat;
-    if (dur.count() > 2 * heartBeatInterval) return true;
+    if (dur.count() > 3 * heartBeatInterval) return true;
     return false;
 }
 
