@@ -16,7 +16,7 @@
 #include "raft_protocol.h"
 #include "raft_state_machine.h"
 
-const int DEBUG_MODE = 0;
+const int DEBUG_MODE = 1;
 const int DEBUG_PART2 = 1;
 
 template<typename state_machine, typename command>
@@ -160,6 +160,7 @@ private:
 
     // Your code here:
     bool should_start_vote();
+    bool should_down_myself(); // for a leader to down automatically
 };
 
 template<typename state_machine, typename command>
@@ -195,10 +196,10 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
 
     /*init some time*/
     lastHeartBeat = getCurrentTime(); // init the first heartbeat
-    electionTimeout = getRandomNumber(150, 300);
+    electionTimeout = getRandomNumber(150, 400);
     retryTimeout = electionTimeout + getRandomNumber(150, 300);
     leaderTimeout = 500;
-    heartBeatInterval = 50;
+    heartBeatInterval = 70;
 }
 
 template<typename state_machine, typename command>
@@ -270,24 +271,11 @@ bool raft<state_machine, command>::new_command(command cmd, int &term, int &inde
     term = current_term;
     log.push_back(log_entry<command>(cmd, current_term));
     index = log.size() - 1;
-    nextIndex.clear();
-    nextIndex.resize(num_nodes(), index);
+    matchIndex[my_id] = index; // myself is matched
     mtx.unlock();
     if (DEBUG_PART2)
-        RAFT_LOG("add log to leader %d", my_id);
+        RAFT_LOG("add log to leader %d, cur len = %d", my_id, index);
     return true; // return right now
-
-//    while (1) {
-//        if (commitIndex >= index) {
-//            if (DEBUG_PART2)
-//                RAFT_LOG("return to client commitIndex = %d", commitIndex)
-//            return true;
-//        }
-//        //mtx.unlock();
-//        //my_mssleep(500);
-//        //mtx.lock();
-//    }
-
 }
 
 template<typename state_machine, typename command>
@@ -468,10 +456,12 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
         if (DEBUG_PART2)
             RAFT_LOG("success to append, add matchindex[%d] to %d", node, arg.prevLogIndex + arg.entries.size());
         matchIndex[node] = arg.prevLogIndex + arg.entries.size();
+        nextIndex[node] = matchIndex[node] + 1;
     } else { // fail to append
         if (DEBUG_PART2)
-            RAFT_LOG("fail to append, decrease nextIndex[%d] to %d", node, nextIndex[node] - 1)
-        nextIndex[node]--;
+            RAFT_LOG("fail to append, decrease nextIndex[%d] to 1", node)
+        nextIndex[node] = 1;
+        matchIndex[node] = 0;
     }
     mtx.unlock();
     return;
@@ -536,6 +526,9 @@ void raft<state_machine, command>::run_background_election() {
         if (is_stopped()) return;
         // Lab3: Your code here
         mtx.lock();
+        if (role == leader && should_down_myself()) {
+            role = follower;
+        }
         if (should_start_vote()) {
             role = candidate;
             current_term++;
@@ -563,6 +556,7 @@ void raft<state_machine, command>::run_background_election() {
             // init two arrays
             matchIndex.clear();
             matchIndex.resize(num_nodes());
+            matchIndex[my_id] = log.size() - 1; // myself is matched
             nextIndex.clear();
             nextIndex.resize(num_nodes(), log.size() - 1);
             // clean the vote information
@@ -604,11 +598,17 @@ void raft<state_machine, command>::run_background_commit() {
                 args.term = current_term;
                 args.leaderId = my_id;
                 args.leaderCommit = commitIndex;
-                args.prevLogTerm = log[log.size() - 2].term;
-                args.prevLogIndex = (log.size() -2);
+
+                args.prevLogIndex = nextIndex[target] - 1;
+                args.prevLogTerm = log[args.prevLogIndex].term;
                 for (int i = nextIndex[target]; i <= log.size() - 1; ++i) {
                     args.entries.push_back(log[i]);
                 }
+                /*
+                args.prevLogTerm = -1;
+                args.prevLogIndex = 0;
+                for (int i = 0; i < log.size(); ++i) args.entries.push_back(log[i]);
+                 */
                 thread_pool->addObjJob(this, &raft::send_append_entries, target, args);
             }
         }
@@ -687,13 +687,21 @@ void raft<state_machine, command>::run_background_ping() {
 *******************************************************************/
 template<typename state_machine, typename command>
 bool raft<state_machine, command>::should_start_vote() {
-    if (role == leader || role == candidate) {
-        lastHeartBeat = getCurrentTime();
+    if (role == leader) {
+        //lastHeartBeat = getCurrentTime();
         return false;
     }
     ms_t cur = getCurrentTime();
     auto dur = cur - lastHeartBeat;
     if (dur.count() > electionTimeout) return true;
+    return false;
+}
+
+template<typename state_machine, typename command>
+bool raft<state_machine, command>::should_down_myself() {
+    ms_t cur = getCurrentTime();
+    auto dur = cur - lastHeartBeat;
+    if (dur.count() > 2 * heartBeatInterval) return true;
     return false;
 }
 
