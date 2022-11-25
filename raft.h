@@ -16,7 +16,8 @@
 #include "raft_protocol.h"
 #include "raft_state_machine.h"
 
-const int DEBUG_MODE = 0;
+const int DEBUG_MODE = 1;
+const int DEBUG_PART2 = 1;
 
 template<typename state_machine, typename command>
 class raft {
@@ -100,8 +101,8 @@ private:
 
     /* ----Persistent state on all server----  */
     //term_t currentTerm;
-    int *votedFor;
-    std::vector<std::pair<command, int>> log;
+    int votedFor;
+    std::vector<log_entry<command>> log;
 
     /* ---- Volatile state on all server----  */
     int commitIndex;
@@ -135,11 +136,6 @@ private:
     void
     handle_append_entries_reply(int target, const append_entries_args<command> &arg, const append_entries_reply &reply);
 
-    static void
-    fuck_cxx(raft<state_machine, command> *, const append_entries_args<command> &arg,
-             const append_entries_reply &reply) {
-        return;
-    }
 
     void send_install_snapshot(int target, install_snapshot_args arg);
 
@@ -190,12 +186,12 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
 
     // Your code here:
     // Do the initialization
-    votedFor = nullptr;
+    votedFor = -1;
     commitIndex = 0;
     lastApplied = 0;
 
     command _;
-    log.push_back(std::pair<command, int>(_, -1)); // just to let index start from 1
+    log.push_back(log_entry<command>(_, -1)); // just to let index start from 1
 
     /*init some time*/
     lastHeartBeat = getCurrentTime(); // init the first heartbeat
@@ -219,7 +215,7 @@ raft<state_machine, command>::~raft() {
     if (background_apply) {
         delete background_apply;
     }
-    if (votedFor) delete votedFor;
+    //if (votedFor) delete votedFor;
     delete thread_pool;
 }
 
@@ -265,16 +261,27 @@ template<typename state_machine, typename command>
 bool raft<state_machine, command>::new_command(command cmd, int &term, int &index) {
     // Lab3: Your code here
     // leader will add new command and return true, the other will return false
+    // return until append the log
     mtx.lock();
     if (role != leader) {
         mtx.unlock();
         return false;
     }
     term = current_term;
-    log.push_back(std::make_pair(cmd, current_term));
+    log.push_back(log_entry<command>(cmd, current_term));
     index = log.size() - 1;
-    mtx.unlock();
-    return true;
+    if (DEBUG_PART2)
+        RAFT_LOG("add log to leader %d", my_id)
+    while (1) {
+        if (lastApplied >= index) {
+            mtx.unlock();
+            return true;
+        }
+        mtx.unlock();
+        my_mssleep(300);
+        mtx.lock();
+    }
+
 }
 
 template<typename state_machine, typename command>
@@ -293,35 +300,43 @@ int raft<state_machine, command>::request_vote(request_vote_args args, request_v
     // Lab3: Your code here
     // This will be seen as callee's view, a caller send request with args, and i will reply it
     mtx.lock();
-    if (DEBUG_MODE)
-        RAFT_LOG("I am %d, term is %d, I got request vote from %d, term si %d\n", my_id, current_term, args.candidateId,
-                 args.term);
+//    if (DEBUG_MODE)
+//        RAFT_LOG("I am %d, term is %d, I got request vote from %d, term si %d\n", my_id, current_term, args.candidateId,
+//                 args.term);
     reply.currentTerm = current_term;
     if (args.term < current_term) { // should reply false and down the sender's role
         reply.voteGranted = false;
         mtx.unlock();
         return 0;
     }
-    if (args.term > current_term) {
+    if (args.term >= current_term) { // conservative plan
         if (DEBUG_MODE)
-            RAFT_LOG("I am %d, term is %d, I got request vote from %d, down to follower\n", my_id, current_term, args.candidateId);
+            RAFT_LOG("I am %d, term is %d, I got request vote from %d, his term is %d, down to follower\n", my_id, current_term,
+                     args.candidateId, args.term);
         role = follower; // arg's term > current_term, down this
+        votedFor = -1;
+        votes.clear();
     }
     current_term = args.term; // update my seen term
-    if (votedFor != nullptr) { // had voted
-        if (*votedFor != args.candidateId)
+    if (votedFor != -1) { // had voted
+        if (DEBUG_MODE)
+            RAFT_LOG("Had Voted to %d", votedFor);
+        if (votedFor != args.candidateId)
             reply.voteGranted = false;
-        else
+        else {
             reply.voteGranted = true;
+        }
         mtx.unlock();
         return 0;
     }
-    int myLastLogTerm = log[log.size() - 1].second;
+    int myLastLogTerm = log[log.size() - 1].term;
     int myLastLogIndex = log.size() - 1;
     if (args.lastLogTerm > myLastLogTerm ||
         (args.lastLogTerm == myLastLogTerm && args.lastLogIndex >= myLastLogIndex)) { // give vote
-        votedFor = new int(args.candidateId);
+        votedFor = args.candidateId;
         reply.voteGranted = true;
+        if (DEBUG_MODE)
+            RAFT_LOG("Vote to %d", args.candidateId)
     }
     mtx.unlock();
     return 0;
@@ -333,6 +348,10 @@ void raft<state_machine, command>::handle_request_vote_reply(int target, const r
     // Lab3: Your code here
     // This will be seen as caller's view, callee gave a reply in reply
     mtx.lock();
+    if (role != candidate) {
+        mtx.unlock();
+        return ;
+    }
     if (DEBUG_MODE)
         RAFT_LOG("I am candidate %d, I got reply of %d, success is %d\n", my_id, target, reply.voteGranted);
     if (reply.voteGranted) { // success to get a vote
@@ -342,6 +361,9 @@ void raft<state_machine, command>::handle_request_vote_reply(int target, const r
             if (DEBUG_MODE)
                 RAFT_LOG("I am candidate %d, I got reply of %d, down to follower\n", my_id, target);
             role = follower;
+            current_term = reply.currentTerm;
+            votedFor = -1;
+            votes.clear();
         }
     }
     mtx.unlock();
@@ -353,24 +375,60 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
     // Lab3: Your code here
     // It's callee's view
     mtx.lock();
-    if (DEBUG_MODE)
-        RAFT_LOG("I am %d, term %d, I got append entries from %d, term %d\n", my_id, current_term, arg.leaderId,
-                 arg.term);
-    if (arg.term < current_term) {
-        reply.term = current_term;
+//    if (DEBUG_MODE)
+//        RAFT_LOG("I am %d, term %d, I got append entries from %d, term %d\n", my_id, current_term, arg.leaderId,
+//                 arg.term);
+    reply.term = current_term;
+    if (arg.term < current_term) { // seen it's from an old leader, ignore
         reply.success = false;
         goto release;
     }
     lastHeartBeat = getCurrentTime(); // update the heart-beat
     if (arg.entries.empty()) { // heartbeat from leader
         reply.success = true;
-        reply.term = current_term;
-        free(votedFor); votedFor = nullptr; // clean votedFor message for next election
-        if (arg.leaderId != my_id) // got heartbeat from other, down to follower
+        leader_id = arg.leaderId;
+        votedFor = -1;
+        votes.clear();
+        if (arg.leaderId != my_id) { // got heartbeat from other, down to follower
             role = follower;
+            //votes.clear();
+        }
         goto release;
     }
     //TODO other logic for append_entries
+    // if the term is same, then the value is same
+    if (arg.prevLogIndex <= log.size() - 1) { // leader's <=
+        if (log[arg.prevLogIndex].term == arg.prevLogTerm) {
+            reply.success = true;
+            int cur;
+            // truncate the origin
+            auto new_end = log.begin() + arg.prevLogIndex + 1;
+            log.assign(log.begin(), new_end);
+            // duplicate the suffix
+            for (int i = 0; i < arg.entries.size(); ++i) {
+                cur = i + 1 + arg.prevLogIndex;
+                if (cur < log.size()) log[cur] = arg.entries[i];
+                else log.push_back(arg.entries[i]);
+            }
+            if (arg.leaderCommit > commitIndex)
+                commitIndex = std::min(arg.leaderCommit, cur);
+            if (DEBUG_PART2)
+                RAFT_LOG("Success to duplicate log")
+            goto release;
+        } else {
+            // just truncate
+            auto new_end = log.begin() + arg.prevLogIndex + 1;
+            log.assign(log.begin(), new_end);
+            reply.success = false;
+            if (DEBUG_PART2)
+                RAFT_LOG("Truncate the last segment")
+        }
+    } else { // loss big
+        if (DEBUG_PART2)
+            RAFT_LOG("follower's log is too short");
+        reply.success = false;
+    }
+    reply.success = false;
     release:
     mtx.unlock();
     return 0;
@@ -380,14 +438,31 @@ template<typename state_machine, typename command>
 void raft<state_machine, command>::handle_append_entries_reply(int node, const append_entries_args<command> &arg,
                                                                const append_entries_reply &reply) {
     // Lab3: Your code here
-    //TODO may need other logic
+
     mtx.lock();
     if (DEBUG_MODE)
         RAFT_LOG("I am leader %d, got reply from %d, success is %d", my_id, node, reply.success);
     if (reply.term > current_term) { // down
         role = follower;
-        if (DEBUG_MODE)
+        current_term = reply.term;
+        votes.clear();
+        //if (DEBUG_MODE)
             RAFT_LOG("I am leader %d, got reply from %d, down to follower", my_id, node);
+        mtx.unlock();
+        return;
+    }
+    if (arg.entries.empty()) { // ignore the reply of heartbeat
+        mtx.unlock();
+        return ;
+    }
+    if (reply.success) { // success to append
+        if (DEBUG_PART2)
+            RAFT_LOG("success to append, add matchindex[%d]", node)
+        matchIndex[node] = arg.prevLogIndex + arg.entries.size();
+    } else { // fail to append
+        if (DEBUG_PART2)
+            RAFT_LOG("fail to append, decrease nextIndex[%d]", node)
+        nextIndex[node]--;
     }
     mtx.unlock();
     return;
@@ -457,10 +532,11 @@ void raft<state_machine, command>::run_background_election() {
             current_term++;
             votes.clear();
             votes.insert(my_id);
+            votedFor = my_id;
             request_vote_args args{};
             args.term = current_term;
             args.candidateId = my_id;
-            args.lastLogTerm = log[log.size() - 1].second;
+            args.lastLogTerm = log[log.size() - 1].term;
             args.lastLogIndex = log.size() - 1;
             int nums = num_nodes();
             for (int target = 0; target < nums; ++target) {
@@ -471,13 +547,30 @@ void raft<state_machine, command>::run_background_election() {
         mtx.unlock();
         my_mssleep(10); // wait for reply
         mtx.lock();
-        if (votes.size() * 2 > num_nodes()) { // become the leader
-            if (DEBUG_MODE)
+        if (role == candidate && votes.size() * 2 > num_nodes()) { // become the leader
+            //if (DEBUG_MODE)
                 RAFT_LOG("I am candidate %d, I become leader\n", my_id);
             role = leader;
+            // init two arrays
+            matchIndex.clear();
+            matchIndex.resize(num_nodes());
+            nextIndex.clear();
+            nextIndex.resize(num_nodes(), log.size() - 1);
+            // clean the vote information
+            votedFor = -1;
+            votes.clear();
+            // send ping right now
+            int nums = num_nodes();
+            append_entries_args<command> args;
+            args.term = current_term;
+            args.leaderId = my_id;
+            for (int target = 0; target < nums; ++target) { // include send ping to myself
+                thread_pool->addObjJob(this, &raft::send_append_entries, target, args);
+            }
         }
         mtx.unlock();
         my_mssleep(retryTimeout);
+        retryTimeout = getRandomNumber(150, 500);
     }
     return;
 }
@@ -488,14 +581,42 @@ void raft<state_machine, command>::run_background_commit() {
 
     // Only work for the leader.
 
-    /*
-        while (true) {
-            if (is_stopped()) return;
-            // Lab3: Your code here
-        }    
-        */
+    while (true) {
+        if (is_stopped()) return;
+        // Lab3: Your code here
+        mtx.lock();
+        if (role == leader) {
+            int nums = num_nodes();
+            for (int target = 0; target < nums; ++target) {
+                // construct args
+                if (target == my_id) continue;
+                if (log.size() <= 1 || matchIndex[target] > log.size() - 1) continue;
+                append_entries_args<command> args;
+                args.term = current_term;
+                args.leaderId = my_id;
+                args.leaderCommit = commitIndex;
+                args.prevLogTerm = log.back().term;
+                args.prevLogIndex = log.size() - 1;
+                for (int i = nextIndex[target]; i <= log.size() - 1; ++i) {
+                    args.entries.push_back(log[i]);
+                }
+                thread_pool->addObjJob(this, &raft::send_append_entries, target, args);
+            }
 
-    return;
+            mtx.unlock();
+            my_mssleep(500);
+            mtx.lock();
+            // test result
+            std::vector<int> tmp(matchIndex);
+            std::sort(tmp.begin(), tmp.end());
+            if (DEBUG_PART2)
+                RAFT_LOG("leader's commitIndex to %d", tmp[num_nodes() / 2])
+            commitIndex = tmp[num_nodes() / 2];
+        }
+        mtx.unlock();
+        my_mssleep(200);
+    }
+
 }
 
 template<typename state_machine, typename command>
@@ -504,12 +625,18 @@ void raft<state_machine, command>::run_background_apply() {
 
     // Work for all the nodes.
 
-    /*
     while (true) {
         if (is_stopped()) return;
         // Lab3: Your code here:
+        mtx.lock();
+        while (lastApplied < commitIndex) {
+            state->apply_log(log[lastApplied + 1].cmd);
+            lastApplied++;
+        }
+        mtx.unlock();
+        my_mssleep(300);
     }    
-    */
+
     return;
 }
 
@@ -549,7 +676,10 @@ void raft<state_machine, command>::run_background_ping() {
 *******************************************************************/
 template<typename state_machine, typename command>
 bool raft<state_machine, command>::should_start_vote() {
-    if (role == leader) return false;
+    if (role == leader || role == candidate) {
+        lastHeartBeat = getCurrentTime();
+        return false;
+    }
     ms_t cur = getCurrentTime();
     auto dur = cur - lastHeartBeat;
     if (dur.count() > electionTimeout) return true;

@@ -44,18 +44,21 @@ unmarshall &operator>>(unmarshall &u, request_vote_reply &reply);
 template<typename command>
 class log_entry {
 public:
-    // Lab3: Your code here
+    int term;
+    command cmd;
+    log_entry() = default;
+    log_entry(command cmd_, int term_) : cmd(cmd_), term(term_) {}
 };
 
 template<typename command>
 marshall &operator<<(marshall &m, const log_entry<command> &entry) {
-    // Lab3: Your code here
+    m << entry.cmd << entry.term;
     return m;
 }
 
 template<typename command>
 unmarshall &operator>>(unmarshall &u, log_entry<command> &entry) {
-    // Lab3: Your code here
+    u >> entry.cmd >> entry.term;
     return u;
 }
 
