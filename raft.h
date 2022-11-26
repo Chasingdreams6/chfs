@@ -18,7 +18,7 @@
 
 const int DEBUG_MODE = 0;
 const int DEBUG_PART2 = 0;
-const int DEBUG_PERSIST = 1;
+const int DEBUG_PERSIST = 0;
 
 template<typename state_machine, typename command>
 class raft {
@@ -683,8 +683,9 @@ void raft<state_machine, command>::run_background_apply() {
             std::vector<int> tmp(matchIndex);
             std::sort(tmp.begin(), tmp.end());
             if (DEBUG_PART2)
-                RAFT_LOG("leader's commitIndex to %d", tmp[num_nodes() / 2])
-            commitIndex = tmp[num_nodes() / 2];
+                RAFT_LOG("leader's commitIndex to %d", tmp[num_nodes() / 2]);
+            if (log[tmp[num_nodes() / 2]].term >= current_term) // for figure 8
+                commitIndex = tmp[num_nodes() / 2];
         }
         while (lastApplied < commitIndex) {
             if (DEBUG_PART2)
