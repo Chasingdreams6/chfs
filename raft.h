@@ -17,7 +17,8 @@
 #include "raft_state_machine.h"
 
 const int DEBUG_MODE = 0;
-const int DEBUG_PART2 = 1;
+const int DEBUG_PART2 = 0;
+const int DEBUG_PERSIST = 1;
 
 template<typename state_machine, typename command>
 class raft {
@@ -103,11 +104,13 @@ private:
     //term_t currentTerm;
     int votedFor;
     std::vector<log_entry<command>> log;
+    std::set<int> votes; // record who had voted me
 
     /* ---- Volatile state on all server----  */
     int commitIndex;
     int lastApplied;
-    std::set<int> votes; // record who had voted me
+
+    int cmdSize;
 
     int electionTimeout;
     int retryTimeout;
@@ -190,8 +193,10 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
     votedFor = -1;
     commitIndex = 0;
     lastApplied = 0;
-
     command _;
+    cmdSize = _.size();
+    assert(cmdSize == 4); // TODO
+
     log.push_back(log_entry<command>(_, -1)); // just to let index start from 1
 
     /*init some time*/
@@ -200,6 +205,11 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
     retryTimeout = electionTimeout + getRandomNumber(150, 300);
     leaderTimeout = 500;
     heartBeatInterval = 70;
+
+    if (DEBUG_PERSIST)
+        RAFT_LOG("Restore all");
+    storage->restoreMetaData(current_term, votedFor);
+    storage->restoreLog(log, cmdSize);
 }
 
 template<typename state_machine, typename command>
@@ -269,7 +279,15 @@ bool raft<state_machine, command>::new_command(command cmd, int &term, int &inde
         return false;
     }
     term = current_term;
-    log.push_back(log_entry<command>(cmd, current_term));
+    log_entry<command> new_entry = log_entry<command>(cmd, current_term);
+    // TODO must assume they're atomic
+    log.push_back(new_entry);
+
+    if (DEBUG_PERSIST)
+        RAFT_LOG("New command persist term=%d vf=%d size=%d", current_term, votedFor, log.size());
+    storage->persistMetaData(current_term, votedFor, log.size());
+    storage->appendLog(new_entry, cmdSize);
+
     index = log.size() - 1;
     matchIndex[my_id] = index; // myself is matched
     mtx.unlock();
@@ -308,9 +326,11 @@ int raft<state_machine, command>::request_vote(request_vote_args args, request_v
             RAFT_LOG("I am %d, term is %d, I got request vote from %d, his term is %d, down to follower\n", my_id, current_term,
                      args.candidateId, args.term);
         role = follower; // arg's term > current_term, down this
+        //storage->persistMetaData(current_term, -1, log.size() - 1);
         votedFor = -1;
         votes.clear();
     }
+    //storage->persistMetaData(args.term, votedFor, log.size() - 1);
     current_term = args.term; // update my seen term
     if (votedFor != -1) { // had voted
         if (DEBUG_MODE)
@@ -320,6 +340,9 @@ int raft<state_machine, command>::request_vote(request_vote_args args, request_v
         else {
             reply.voteGranted = true;
         }
+        if (DEBUG_PERSIST)
+            RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, votedFor, log.size());
+        storage->persistMetaData(current_term, votedFor, log.size());
         mtx.unlock();
         return 0;
     }
@@ -330,8 +353,11 @@ int raft<state_machine, command>::request_vote(request_vote_args args, request_v
         votedFor = args.candidateId;
         reply.voteGranted = true;
         if (DEBUG_MODE)
-            RAFT_LOG("Vote to %d", args.candidateId)
+            RAFT_LOG("Vote to %d", args.candidateId);
     }
+    if (DEBUG_PERSIST)
+        RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, votedFor, log.size());
+    storage->persistMetaData(current_term, votedFor, log.size());
     mtx.unlock();
     return 0;
 }
@@ -355,6 +381,11 @@ void raft<state_machine, command>::handle_request_vote_reply(int target, const r
             if (DEBUG_MODE)
                 RAFT_LOG("I am candidate %d, I got reply of %d, down to follower\n", my_id, target);
             role = follower;
+            if (current_term != reply.currentTerm || votedFor != -1) { // log only changed
+                if (DEBUG_PERSIST)
+                    RAFT_LOG("Persist term=%d votedFor=%d size=%d", reply.currentTerm, -1, log.size());
+                storage->persistMetaData(reply.currentTerm, -1, log.size());
+            }
             current_term = reply.currentTerm;
             votedFor = -1;
             votes.clear();
@@ -381,10 +412,16 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
     if (arg.entries.empty()) { // heartbeat from leader
         reply.success = true;
         leader_id = arg.leaderId;
+        if (votedFor != -1) {
+            if (DEBUG_PERSIST)
+                RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, -1,  log.size());
+            storage->persistMetaData(current_term, -1, log.size());
+        }
         votedFor = -1;
         votes.clear();
         if (arg.leaderCommit <= log.size() - 1) { // had duplicated in log
             commitIndex = arg.leaderCommit;
+            //commitIndex = std::min(arg.leaderCommit, )
         }
         if (arg.leaderId != my_id) { // got heartbeat from other, down to follower
             role = follower;
@@ -410,7 +447,11 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
             if (arg.leaderCommit > commitIndex)
                 commitIndex = std::min(arg.leaderCommit, cur);
             if (DEBUG_PART2)
-                RAFT_LOG("Success to duplicate log")
+                RAFT_LOG("Success to duplicate log");
+            if (DEBUG_PERSIST)
+                RAFT_LOG("Persist all log and meta term=%d vf=%d size=%d", current_term, votedFor, log.size());
+            storage->persistMetaData(current_term, votedFor, log.size());
+            storage->persistLog(log);
             goto release;
         } else {
             // just truncate
@@ -418,7 +459,12 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
             log.assign(log.begin(), new_end);
             reply.success = false;
             if (DEBUG_PART2)
-                RAFT_LOG("Truncate the last segment")
+                RAFT_LOG("Truncate the last segment");
+            if (DEBUG_PERSIST)
+                RAFT_LOG("Persist all log and meta term=%d vf=%d size=%d", current_term, votedFor, log.size());
+            storage->persistMetaData(current_term, votedFor, log.size());
+            storage->persistLog(log);
+            goto release;
         }
     } else { // loss big
         if (DEBUG_PART2)
@@ -442,6 +488,9 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
     if (reply.term > current_term) { // down
         role = follower;
         current_term = reply.term;
+        if (DEBUG_PERSIST)
+            RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, votedFor, log.size());
+        storage->persistMetaData(current_term, votedFor, log.size());
         votes.clear();
         //if (DEBUG_MODE)
             RAFT_LOG("I am leader %d, got reply from %d, down to follower", my_id, node);
@@ -535,6 +584,9 @@ void raft<state_machine, command>::run_background_election() {
             votes.clear();
             votes.insert(my_id);
             votedFor = my_id;
+            if (DEBUG_PERSIST)
+                RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, votedFor, log.size());
+            storage->persistMetaData(current_term, votedFor, log.size());
             request_vote_args args{};
             args.term = current_term;
             args.candidateId = my_id;
@@ -561,6 +613,9 @@ void raft<state_machine, command>::run_background_election() {
             nextIndex.resize(num_nodes(), log.size() - 1);
             // clean the vote information
             votedFor = -1;
+            if (DEBUG_PERSIST)
+                RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, votedFor, log.size());
+            storage->persistMetaData(current_term, votedFor, log.size());
             votes.clear();
             // send ping right now
             int nums = num_nodes();
@@ -588,7 +643,7 @@ void raft<state_machine, command>::run_background_commit() {
         if (is_stopped()) return;
         // Lab3: Your code here
         mtx.lock();
-        if (role == leader && commitIndex < log.size() - 1) {
+        if (role == leader) {
             int nums = num_nodes();
             for (int target = 0; target < nums; ++target) {
                 // construct args
@@ -604,11 +659,6 @@ void raft<state_machine, command>::run_background_commit() {
                 for (int i = nextIndex[target]; i <= log.size() - 1; ++i) {
                     args.entries.push_back(log[i]);
                 }
-                /*
-                args.prevLogTerm = -1;
-                args.prevLogIndex = 0;
-                for (int i = 0; i < log.size(); ++i) args.entries.push_back(log[i]);
-                 */
                 thread_pool->addObjJob(this, &raft::send_append_entries, target, args);
             }
         }
@@ -638,7 +688,7 @@ void raft<state_machine, command>::run_background_apply() {
         }
         while (lastApplied < commitIndex) {
             if (DEBUG_PART2)
-                RAFT_LOG("commitIndex = %d, lastAppied = %d", commitIndex, lastApplied)
+                RAFT_LOG("commitIndex = %d, lastAppied = %d", commitIndex, lastApplied);
             assert(&log[lastApplied + 1].cmd != nullptr);
             state->apply_log(log[lastApplied + 1].cmd);
             lastApplied++;
