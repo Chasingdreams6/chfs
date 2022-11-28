@@ -24,9 +24,9 @@ public:
     // Lab3: Your code here
     void persistMetaData(int, int, int);
     void persistLog(std::vector<log_entry<command>> const &);
-    void appendLog(log_entry<command> const &, int);
+    void appendLog(log_entry<command> const &);
     void restoreMetaData(int&, int&);
-    void restoreLog(std::vector<log_entry<command>> &, int );
+    void restoreLog(std::vector<log_entry<command>> &);
 private:
     std::mutex mtx;
     // Lab3: Your code here
@@ -83,23 +83,25 @@ void raft_storage<command>::persistLog(std::vector<log_entry<command>> const &lo
         return ;
     }
     FILE *fd = fopen(log_name.c_str(), "wb");
-    int len = log.size(), size = log[0].cmd.size();
+    int len = log.size(), size;
     if (DEBUG_PART3)
         STORE_LOG("Persist All log, len = %d", len);
     for (int i = 1; i < len; ++i) {
-        assert(fwrite(&log[i].term, 4, 1, fd));
-        //char *ptr = (char*) malloc(size * sizeof(char));
-        char ptr[1024];
+        size = log[i].cmd.size();
+        assert(fwrite(&log[i].term, 4, 1, fd)); //
+        assert(fwrite(&size, 4, 1, fd)); // write size
+        char *ptr = (char*) malloc(size * sizeof(char));
+        //char ptr[1024];
         log[i].cmd.serialize(ptr, size);
         assert(fwrite(ptr, 1, size, fd) == size);
-        //free(ptr);
+        free(ptr);
     }
     fclose(fd);
     mtx.unlock();
 }
 
 template<typename command>
-void raft_storage<command>::restoreLog(std::vector<log_entry<command>> &log, int size) {
+void raft_storage<command>::restoreLog(std::vector<log_entry<command>> &log) {
     mtx.lock();
     FILE *fd = fopen(log_name.c_str(), "rb");
     FILE *md = fopen(meta_name.c_str(), "rb");
@@ -107,11 +109,11 @@ void raft_storage<command>::restoreLog(std::vector<log_entry<command>> &log, int
         mtx.unlock();
         return ;
     }
-    int len;
+    int len, size;
     fseek(md, 8, SEEK_SET);
     assert(fread(&len, 4, 1, md));
-    if (DEBUG_PART3)
-        STORE_LOG("Restore All log, len = %d, size = %d", len, size);
+//    if (DEBUG_PART3)
+//        STORE_LOG("Restore All log, len = %d", len);
     log.clear();
     command _;
     log.push_back(log_entry<command>(_, -1));
@@ -119,13 +121,12 @@ void raft_storage<command>::restoreLog(std::vector<log_entry<command>> &log, int
         int term;
         command cmd;
         assert(fread(&term, 4, 1, fd));
-        char ptr[1024];
+        assert(fread(&size, 4, 1, fd)); // read size
+        char *ptr = (char*) malloc(size * sizeof(char));
         assert(fread(ptr, 1, size, fd) == size);
-        assert(ptr);
         cmd.deserialize(ptr, size);
-        assert(ptr);
         log.push_back(log_entry<command>(cmd, term));
-        //free(ptr);
+        free(ptr);
     }
 
     fclose(fd);
@@ -134,15 +135,16 @@ void raft_storage<command>::restoreLog(std::vector<log_entry<command>> &log, int
 }
 
 template<typename command>
-void raft_storage<command>::appendLog(const log_entry<command> &logEntry, int size) {
+void raft_storage<command>::appendLog(const log_entry<command> &logEntry) {
     mtx.lock();
     FILE *fd = fopen(log_name.c_str(), "ab");
+    int size = logEntry.cmd.size();
     assert(fwrite(&(logEntry.term), 4, 1, fd));
-    //char *ptr = (char*) malloc(size * sizeof(char));
-    char ptr[1024];
-    assert(ptr);
+    assert(fwrite(&size, 4, 1, fd));
+    char *ptr = (char*) malloc(size * sizeof(char));
     logEntry.cmd.serialize(ptr, size);
     assert(fwrite(ptr, 1, size, fd) == size);
+    free(ptr);
     fclose(fd);
     if (DEBUG_PART3)
         STORE_LOG("Appended a log, term = %d", logEntry.term);

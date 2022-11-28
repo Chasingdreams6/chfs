@@ -333,13 +333,14 @@ fuseserver_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
         getattr(ino, e.attr);
         fuse_reply_entry(req, &e);
     } else { 
-        chfs->lookupdir(parent, name, found, ino);
-        if (found) { // find a dir
-            e.ino = ino; // fuck this
-            getattr(ino, e.attr);
-            fuse_reply_entry(req, &e);
-        }
-        else  fuse_reply_err(req, ENOENT);
+//        chfs->lookupdir(parent, name, found, ino);
+//        if (found) { // find a dir
+//            e.ino = ino; // fuck this
+//            getattr(ino, e.attr);
+//            fuse_reply_entry(req, &e);
+//        }
+//        else
+        fuse_reply_err(req, ENOENT);
     }
 
 }

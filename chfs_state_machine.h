@@ -21,6 +21,7 @@ public:
         command_type tp;
 
         bool done;
+        //int cnt = 0;
         std::mutex mtx;             // protect the struct
         std::condition_variable cv; // notify the caller
     };
@@ -36,6 +37,8 @@ public:
 
     chfs_command_raft(const chfs_command_raft &cmd);
 
+    chfs_command_raft(command_type , extent_protocol::extentid_t , uint32_t , std::string );
+
     virtual ~chfs_command_raft();
 
     virtual int size() const override;
@@ -43,6 +46,13 @@ public:
     virtual void serialize(char *buf, int size) const override;
 
     virtual void deserialize(const char *buf, int size);
+
+    void package_int(char *out, int x) const;
+    void package_ull(char *out, extent_protocol::extentid_t x) const;
+    void package_string(char *out, std::string s) const;
+    void unpackage_ull(const char *in, extent_protocol::extentid_t &x);
+    void unpackage_int(const char *in, int& x);
+    void unpackage_string(const char *out, int len, std::string &s);
 };
 
 marshall &operator<<(marshall &m, const chfs_command_raft &cmd);

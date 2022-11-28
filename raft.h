@@ -110,8 +110,6 @@ private:
     int commitIndex;
     int lastApplied;
 
-    int cmdSize;
-
     int electionTimeout;
     int retryTimeout;
     ms_t lastHeartBeat;
@@ -194,8 +192,6 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
     commitIndex = 0;
     lastApplied = 0;
     command _;
-    cmdSize = _.size();
-    assert(cmdSize == 4); // TODO
 
     log.push_back(log_entry<command>(_, -1)); // just to let index start from 1
 
@@ -209,7 +205,7 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
     if (DEBUG_PERSIST)
         RAFT_LOG("Restore all");
     storage->restoreMetaData(current_term, votedFor);
-    storage->restoreLog(log, cmdSize);
+    storage->restoreLog(log);
 }
 
 template<typename state_machine, typename command>
@@ -286,7 +282,7 @@ bool raft<state_machine, command>::new_command(command cmd, int &term, int &inde
     if (DEBUG_PERSIST)
         RAFT_LOG("New command persist term=%d vf=%d size=%d", current_term, votedFor, log.size());
     storage->persistMetaData(current_term, votedFor, log.size());
-    storage->appendLog(new_entry, cmdSize);
+    storage->appendLog(new_entry);
 
     index = log.size() - 1;
     matchIndex[my_id] = index; // myself is matched

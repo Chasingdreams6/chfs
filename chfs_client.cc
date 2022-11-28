@@ -228,7 +228,8 @@ chfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
         goto release;
     }
     EXT_RPC(ec->create(extent_protocol::T_FILE, ino_out));
-    setattr(ino_out, 0);
+    //setattr(ino_out, 0);
+    EXT_RPC(ec->put(ino_out, ""));
     /*add a dirent to parent's information*/
     EXT_RPC(ec->get(parent, buf));
     buf = buf + "&" + std::string(name) + "&" + filename(ino_out);
@@ -249,19 +250,20 @@ chfs_client::mkdir(inum parent, const char *name, mode_t mode, inum &ino_out)
      * note: lookup is what you need to check if directory exist;
      * after create file or dir, you must remember to modify the parent infomation.
      */
-    r = lookupdir(parent, name, found, ino_out);
-    if (r != OK) goto release;
-    if (found) {
-        r = EXIST;
-        goto release;
-    }
+    //r = lookupdir(parent, name, found, ino_out);
+//    if (r != OK) goto release;
+//    if (found) {
+//        r = EXIST;
+//        goto release;
+//    }
     r = lookup(parent, name, found, ino_out);
     if (found) {
         r = EXIST;
         goto release;
     }
     EXT_RPC(ec->create(extent_protocol::T_DIR, ino_out));
-    setattr(ino_out, 0); // make the new dir empty
+    //setattr(ino_out, 0); // make the new dir empty
+    EXT_RPC(ec->put(ino_out,""));
     /*add a dirent to parent's information*/
     EXT_RPC(ec->get(parent, buf));
     buf = buf + "&" + std::string(name) + "&" + filename(ino_out);
@@ -272,7 +274,7 @@ release:
     return r;
 }
 
-/*lookup a file or symlink, rather than a dir*/
+/*lookup a file or symlink, or a dir*/
 int
 chfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
 {
@@ -296,11 +298,11 @@ chfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
     found = false; ino_out = 0;
     for (std::list<dirent>::iterator it = list.begin(); it != list.end(); ++it) {
         if (!strcmp(name, (*it).name.c_str())) {
-            if (isfile((*it).inum) || issymlink((*it).inum)) {
+           // if (isfile((*it).inum) || issymlink((*it).inum)) {
                 ino_out = (*it).inum;
                 found = true;
                 goto release;
-            }
+          //  }
         }
     }
     printf("lookup file/symlink in parent=%lld name=%s ino=%lld found=%d\n", parent, name, ino_out, found);
@@ -434,29 +436,6 @@ chfs_client::write(inum ino, size_t size, off_t off, const char *data,
     buf.replace(off, size, data_buf);
     EXT_RPC(ec->put(ino, buf));
     printf("finish write inum=%lld size=%lu off=%ld \n", ino, size, off);
-    /*
-     * your code goes here.
-     * note: write using ec->put().
-     * when off > length of original file, fill the holes with '\0'.
-     */
-    // EXT_RPC(ec->get(ino, buf));
-    // ori_size = buf.length();
-    // if ((size_t)off > ori_size) { // fix the hole
-    //     for (size_t i = 0; i < off - ori_size; ++i) {
-    //         buf += '\0';
-    //     }
-    //     ori_size = off;
-    // }
-    // if (off + size > ori_size) { // append
-    //     for (size_t i = 0; i < off + size - ori_size; ++i)
-    //         buf += 'z';
-    // }
-    // for (size_t i = 0; i < size; ++i) {
-    //     buf[off + i] = data[i];
-    //     bytes_written++;
-    // }
-    // EXT_RPC(ec->put(ino, buf));
-    
 release:
     return r;
 }
@@ -475,10 +454,12 @@ int chfs_client::unlink(inum parent,const char *name)
      */
     printf("start unlink parent=%lld name=%s\n", parent, name);
     r = readdir(parent, list);
+    uint32_t target_inum;
     for (it = list.begin(); it != list.end(); it++) {
         if (!strcmp(name, (*it).name.c_str())) {
             if (isfile((*it).inum) || issymlink((*it).inum)) {
-                EXT_RPC(ec->remove((*it).inum));
+                //EXT_RPC(ec->remove((*it).inum));
+                target_inum = (*it).inum;
                 flag = true;
                 list.erase(it);
                 break;
@@ -488,6 +469,7 @@ int chfs_client::unlink(inum parent,const char *name)
     if (!flag) { // not erase
         return chfs_client::NOENT;
     }
+    EXT_RPC(ec->remove(target_inum));
     for (it = list.begin(); it != list.end(); it++) {
         buf = buf + "&" + (*it).name + "&" +  filename((*it).inum);
     }
