@@ -17,7 +17,7 @@
 #include "raft_state_machine.h"
 
 const int DEBUG_MODE = 0;
-const int DEBUG_PART2 = 0;
+const int DEBUG_PART2 = 1;
 const int DEBUG_PERSIST = 0;
 
 template<typename state_machine, typename command>
@@ -161,6 +161,7 @@ private:
 
     // Your code here:
     bool should_start_vote();
+
     bool should_down_myself(); // for a leader to down automatically
 };
 
@@ -200,7 +201,7 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
     electionTimeout = getRandomNumber(150, 400);
     retryTimeout = electionTimeout + getRandomNumber(150, 300);
     leaderTimeout = 500;
-    heartBeatInterval = 70;
+    heartBeatInterval = 150;
 
     if (DEBUG_PERSIST)
         RAFT_LOG("Restore all");
@@ -286,9 +287,13 @@ bool raft<state_machine, command>::new_command(command cmd, int &term, int &inde
 
     index = log.size() - 1;
     matchIndex[my_id] = index; // myself is matched
-    mtx.unlock();
+    for (int i = 0; i < num_nodes(); ++i) {
+        if (nextIndex[i] == 1) continue;
+        nextIndex[i] = index;
+    }
     if (DEBUG_PART2)
         RAFT_LOG("add log to leader %d, cur len = %d", my_id, index);
+    mtx.unlock();
     return true; // return right now
 }
 
@@ -317,9 +322,10 @@ int raft<state_machine, command>::request_vote(request_vote_args args, request_v
         mtx.unlock();
         return 0;
     }
-    if (args.term >= current_term) { // conservative plan
+    if (args.term > current_term) { // conservative plan
         if (DEBUG_MODE)
-            RAFT_LOG("I am %d, term is %d, I got request vote from %d, his term is %d, down to follower\n", my_id, current_term,
+            RAFT_LOG("I am %d, term is %d, I got request vote from %d, his term is %d, down to follower\n", my_id,
+                     current_term,
                      args.candidateId, args.term);
         role = follower; // arg's term > current_term, down this
         //storage->persistMetaData(current_term, -1, log.size() - 1);
@@ -366,7 +372,7 @@ void raft<state_machine, command>::handle_request_vote_reply(int target, const r
     mtx.lock();
     if (role != candidate) {
         mtx.unlock();
-        return ;
+        return;
     }
     if (DEBUG_MODE)
         RAFT_LOG("I am candidate %d, I got reply of %d, success is %d\n", my_id, target, reply.voteGranted);
@@ -410,7 +416,7 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
         leader_id = arg.leaderId;
         if (votedFor != -1) {
             if (DEBUG_PERSIST)
-                RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, -1,  log.size());
+                RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, -1, log.size());
             storage->persistMetaData(current_term, -1, log.size());
         }
         votedFor = -1;
@@ -427,7 +433,7 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
     }
     //TODO other logic for append_entries
     // if the term is same, then the value is same
-    if (arg.prevLogIndex <= log.size() - 1) { // leader's <=
+    if (arg.prevLogIndex >= 0 && arg.prevLogIndex <= log.size() - 1) { // leader's <=
         if (log[arg.prevLogIndex].term == arg.prevLogTerm) {
             reply.success = true;
             int cur;
@@ -443,7 +449,7 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
             if (arg.leaderCommit > commitIndex)
                 commitIndex = std::min(arg.leaderCommit, cur);
             if (DEBUG_PART2)
-                RAFT_LOG("Success to duplicate log");
+                RAFT_LOG("Success to duplicate log %d->%d", arg.leaderId, my_id);
             if (DEBUG_PERSIST)
                 RAFT_LOG("Persist all log and meta term=%d vf=%d size=%d", current_term, votedFor, log.size());
             storage->persistMetaData(current_term, votedFor, log.size());
@@ -488,14 +494,14 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
             RAFT_LOG("Persist term=%d votedFor=%d size=%d", current_term, votedFor, log.size());
         storage->persistMetaData(current_term, votedFor, log.size());
         votes.clear();
-        //if (DEBUG_MODE)
+        if (DEBUG_MODE)
             RAFT_LOG("I am leader %d, got reply from %d, down to follower", my_id, node);
         mtx.unlock();
         return;
     }
     if (arg.entries.empty()) { // ignore the reply of heartbeat
         mtx.unlock();
-        return ;
+        return;
     }
     if (reply.success) { // success to append
         if (DEBUG_PART2)
@@ -504,7 +510,7 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
         nextIndex[node] = matchIndex[node] + 1;
     } else { // fail to append
         if (DEBUG_PART2)
-            RAFT_LOG("fail to append, decrease nextIndex[%d] to 1", node)
+            RAFT_LOG("fail to append, decrease nextIndex[%d] from %d to 1", node, nextIndex[node]);
         nextIndex[node] = 1;
         matchIndex[node] = 0;
     }
@@ -599,7 +605,7 @@ void raft<state_machine, command>::run_background_election() {
         mtx.lock();
         if (role == candidate && votes.size() * 2 > num_nodes()) { // become the leader
             //if (DEBUG_MODE)
-                RAFT_LOG("I am candidate %d, I become leader\n", my_id);
+            RAFT_LOG("I am candidate %d, I become leader\n", my_id);
             role = leader;
             // init two arrays
             matchIndex.clear();
@@ -678,21 +684,22 @@ void raft<state_machine, command>::run_background_apply() {
             // test result
             std::vector<int> tmp(matchIndex);
             std::sort(tmp.begin(), tmp.end());
-            if (DEBUG_PART2)
-                RAFT_LOG("leader's commitIndex to %d", tmp[num_nodes() / 2]);
-            if (log[tmp[num_nodes() / 2]].term >= current_term) // for figure 8
+            if (log[tmp[num_nodes() / 2]].term >= current_term) {
                 commitIndex = tmp[num_nodes() / 2];
+                if (DEBUG_PART2)
+                    RAFT_LOG("leader's commitIndex to %d", tmp[num_nodes() / 2]);
+            }
         }
         while (lastApplied < commitIndex) {
             if (DEBUG_PART2)
-                RAFT_LOG("commitIndex = %d, lastAppied = %d", commitIndex, lastApplied);
+                RAFT_LOG("commitIndex = %d, apply = %d", commitIndex, lastApplied + 1);
             assert(&log[lastApplied + 1].cmd != nullptr);
             state->apply_log(log[lastApplied + 1].cmd);
             lastApplied++;
         }
         mtx.unlock();
         my_mssleep(50);
-    }    
+    }
 
     return;
 }
