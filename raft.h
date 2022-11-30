@@ -17,7 +17,7 @@
 #include "raft_state_machine.h"
 
 const int DEBUG_MODE = 0;
-const int DEBUG_PART2 = 1;
+const int DEBUG_PART2 = 0;
 const int DEBUG_PERSIST = 0;
 
 template<typename state_machine, typename command>
@@ -198,8 +198,8 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
 
     /*init some time*/
     lastHeartBeat = getCurrentTime(); // init the first heartbeat
-    electionTimeout = getRandomNumber(150, 400);
-    retryTimeout = electionTimeout + getRandomNumber(150, 300);
+    electionTimeout = 150 + (400 - 150) / num_nodes() * my_id;
+    retryTimeout = 150 + (400 - 150) / num_nodes() * my_id;
     leaderTimeout = 500;
     heartBeatInterval = 150;
 
@@ -329,6 +329,7 @@ int raft<state_machine, command>::request_vote(request_vote_args args, request_v
                      args.candidateId, args.term);
         role = follower; // arg's term > current_term, down this
         //storage->persistMetaData(current_term, -1, log.size() - 1);
+        //if (args.term > current_term)
         votedFor = -1;
         votes.clear();
     }
@@ -370,10 +371,6 @@ void raft<state_machine, command>::handle_request_vote_reply(int target, const r
     // Lab3: Your code here
     // This will be seen as caller's view, callee gave a reply in reply
     mtx.lock();
-    if (role != candidate) {
-        mtx.unlock();
-        return;
-    }
     if (DEBUG_MODE)
         RAFT_LOG("I am candidate %d, I got reply of %d, success is %d\n", my_id, target, reply.voteGranted);
     if (reply.voteGranted) { // success to get a vote
@@ -747,7 +744,10 @@ bool raft<state_machine, command>::should_start_vote() {
     }
     ms_t cur = getCurrentTime();
     auto dur = cur - lastHeartBeat;
-    if (dur.count() > electionTimeout) return true;
+    if (dur.count() > electionTimeout) {
+        electionTimeout = getRandomNumber(300, 500);
+        return true;
+    }
     return false;
 }
 
