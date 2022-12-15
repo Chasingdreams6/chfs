@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 #include <map>
-
+#include <unordered_map>
 #include "rpc.h"
 #include "mr_protocol.h"
 
@@ -20,6 +20,7 @@ using namespace std;
 struct KeyVal {
     string key;
     string val;
+    KeyVal(string key1, string val1) : key(key1), val(val1) {}
 };
 
 //
@@ -29,10 +30,25 @@ struct KeyVal {
 // and look only at the contents argument. The return value is a slice
 // of key/value pairs.
 //
+bool isLetter(char ch) {
+    return ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z';
+}
 vector<KeyVal> Map(const string &filename, const string &content)
 {
-	// Copy your code from mr_sequential.cc here.
-
+    unordered_map<string, int> map;
+    vector<KeyVal> res;
+    string word;
+    for (auto ch : content) {
+        if (isLetter(ch)) word += ch;
+        else if (word.size()) {
+            map[word]++;
+            word.clear();
+        }
+    }
+    for (auto kv : map ) {
+        res.emplace_back(KeyVal(kv.first, to_string(kv.second)));
+    }
+    return res;
 }
 
 //
@@ -40,10 +56,16 @@ vector<KeyVal> Map(const string &filename, const string &content)
 // map tasks, with a list of all the values created for that key by
 // any map task.
 //
+string strPlus(string str1, string str2) {
+    return to_string(stol(str1) + stol(str2));
+};
 string Reduce(const string &key, const vector < string > &values)
 {
     // Copy your code from mr_sequential.cc here.
-
+    string ret = "0";
+    for (auto str : values)
+        ret = strPlus(ret, str);
+    return ret;
 }
 
 
@@ -57,15 +79,18 @@ public:
 	void doWork();
 
 private:
-	void doMap(int index, const vector<string> &filenames);
-	void doReduce(int index);
+	void doMap(int index, const string &filename);
+	void doReduce(int index, int nfiles);
 	void doSubmit(mr_tasktype taskType, int index);
+    void askTask(mr_protocol::AskTaskResponse &);
 
+    bool working = false;
 	mutex mtx;
 	int id;
 
 	rpcc *cl;
 	std::string basedir;
+    std::string hackdir = "../";
 	MAPF mapf;
 	REDUCEF reducef;
 };
@@ -84,17 +109,74 @@ Worker::Worker(const string &dst, const string &dir, MAPF mf, REDUCEF rf)
 		printf("mr worker: call bind error\n");
 	}
 }
-
-void Worker::doMap(int index, const vector<string> &filenames)
+int strHash(const string &str) {
+    unsigned int hashVal = 0;
+    for (char ch : str) {
+        hashVal = hashVal * 79 + (int) ch;
+    }
+    return hashVal % REDUCER_COUNT;
+}
+void Worker::doMap(int index, const string &filename)
 {
 	// Lab4: Your code goes here.
+    if (!filename.size()) return;
+    working = true;
+    cout << "baseDir:" << basedir << endl;
+    cout << "doMap File:" << filename << endl;
+    string prefix = hackdir + "tmr-" + to_string(index) + "-";
+    string content;
+    ifstream file(filename);
+    ostringstream tmp;
+    tmp << file.rdbuf();
+    content = tmp.str();
 
+    vector <KeyVal> keyVals = Map(filename, content);
+
+    vector <string> contents(REDUCER_COUNT);
+    for (const KeyVal &keyVal : keyVals) {
+        int reducerId = strHash(keyVal.key);
+        contents[reducerId] += keyVal.key + ' ' + keyVal.val + '\n';
+    }
+
+    for (int i = 0; i < REDUCER_COUNT; ++i) {
+        const string &content = contents[i];
+        if (!content.empty()) {
+            string intermediateFilepath = prefix + to_string(i);
+            ofstream file(intermediateFilepath, ios::out);
+            file << content;
+            file.close();
+        }
+    }
+    file.close();
 }
 
-void Worker::doReduce(int index)
+void Worker::doReduce(int index, int nfiles)
 {
 	// Lab4: Your code goes here.
+    working = true;
+    string filepath;
+    unordered_map<string, unsigned long long> map;
+    cout << "id = " << index << " Start do reduce" << endl;
+    for (int i = 0; i < nfiles; ++i) {
+        filepath = hackdir + "tmr-" + to_string(i) + '-' + to_string(index);
+        ifstream file(filepath, ios::in);
+        if (!file.is_open()) {
+            continue;
+        }
+        string key, value;
+        while (file >> key >> value)
+            map[key] += atoll(value.c_str());
+        file.close();
+    }
 
+    string content;
+    for (auto keyVal : map)
+        content += keyVal.first + ' ' + to_string(keyVal.second) + '\n';
+
+    ofstream mrOut(basedir + "mr-out", ios::out | ios::app);
+    cout << "After Reduce to ->" + basedir + "mr-out" << endl;
+    mrOut << content << endl;
+    mrOut.close();
 }
 
 void Worker::doSubmit(mr_tasktype taskType, int index)
@@ -105,20 +187,33 @@ void Worker::doSubmit(mr_tasktype taskType, int index)
 		fprintf(stderr, "submit task failed\n");
 		exit(-1);
 	}
+    working = false;
+}
+
+void Worker::askTask(mr_protocol::AskTaskResponse &res) {
+    cl->call(mr_protocol::asktask, id, res);
 }
 
 void Worker::doWork()
 {
 	for (;;) {
-
-		//
-		// Lab4: Your code goes here.
-		// Hints: send asktask RPC call to coordinator
-		// if mr_tasktype::MAP, then doMap and doSubmit
-		// if mr_tasktype::REDUCE, then doReduce and doSubmit
-		// if mr_tasktype::NONE, meaning currently no work is needed, then sleep
-		//
-
+        mr_protocol::AskTaskResponse res;
+        if (!working) askTask(res);
+        switch (res.tasktype) {
+            case MAP:
+                cout << "Work on " << res.index << " " << res.filename << endl;
+                doMap(res.index, res.filename);
+                doSubmit(MAP, res.index);
+                break;
+            case REDUCE:
+                cout << "Reduce on" << res.index << " " << endl;
+                doReduce(res.index, res.nfiles);
+                doSubmit(REDUCE, res.index);
+                break;
+            case NONE:
+                sleep(1);
+                break;
+        }
 	}
 }
 

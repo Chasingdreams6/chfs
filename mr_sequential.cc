@@ -8,6 +8,7 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <cstring>
 
 using namespace std;
 
@@ -17,6 +18,18 @@ typedef struct {
 }
 KeyVal;
 
+bool isEngAlpha(char ch) {
+    return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z';
+};
+bool judgeStr(string& str) {
+    if (str == "") return false;
+    for (auto ch : str)
+        if (!isEngAlpha(ch)) return false;
+    return true;
+};
+string strPlus(string str1, string str2) {
+    return to_string(stol(str1) + stol(str2));
+};
 //
 // The map function is called once for each file of input. The first
 // argument is the name of the input file, and the second is the
@@ -28,7 +41,28 @@ vector<KeyVal> Map(const string &filename, const string &content)
 {
     // Your code goes here
     // Hints: split contents into an array of words.
-
+    vector<KeyVal> ret;
+    int l = 0, r = 0;
+    while (content[r] != '\0') {
+        if (isEngAlpha(content[r])) r++;
+        else {
+            string str = r > l ? content.substr(l, r - l) : "";
+            if (judgeStr(str)) { // legal word
+                KeyVal kv;
+                kv.key = str; kv.val = "1";
+                ret.push_back(kv);
+            };
+            while (content[r] != '\0' && !isEngAlpha(content[r])) r++;
+            l = r;
+        };
+    };
+    string str = r > l ? content.substr(l, r - l) : "";
+    if (judgeStr(str)) {
+        KeyVal kv;
+        kv.key = str; kv.val = "1";
+        ret.push_back(kv);
+    };
+    return ret;
 }
 
 //
@@ -40,7 +74,10 @@ string Reduce(const string &key, const vector <string> &values)
 {
     // Your code goes here
     // Hints: return the number of occurrences of the word.
-
+    string ret = "0";
+    for (auto str : values)
+        ret = strPlus(ret, str);
+    return ret;
 }
 
 int main(int argc, char ** argv)

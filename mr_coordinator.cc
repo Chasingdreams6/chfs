@@ -39,29 +39,85 @@ private:
 	long completedMapCount;
 	long completedReduceCount;
 	bool isFinished;
-	
+
+    bool assignTask(Task &);
 	string getFile(int index);
 };
 
 
 // Your code here -- RPC handlers for the worker to call.
 
+bool Coordinator::assignTask(Task &resTask) {
+    resTask.taskType = NONE;
+    bool res = false;
+    if (completedMapCount < long(mapTasks.size())) {
+        for (auto &task : mapTasks) {
+            if (!task.isCompleted && !task.isAssigned) {
+                resTask = task;
+                task.isAssigned = true;
+                res = true;
+                break;
+            }
+        }
+    } else {
+        for (auto &task : reduceTasks) {
+            if (!task.isCompleted && !task.isAssigned) {
+                resTask = task;
+                task.isAssigned = true;
+                res = true;
+                break;
+            }
+        }
+    }
+    return res;
+}
+
 mr_protocol::status Coordinator::askTask(int, mr_protocol::AskTaskResponse &reply) {
 	// Lab4 : Your code goes here.
-
-	return mr_protocol::OK;
+    Task availableTask;
+    mtx.lock();
+    if (assignTask(availableTask)) {
+        reply.index = availableTask.index;
+        reply.tasktype = (mr_tasktype) availableTask.taskType;
+        reply.filename = getFile(reply.index);
+        reply.nfiles = files.size();
+    } else {
+        reply.index = -1;
+        reply.tasktype = NONE;
+        reply.filename = "";
+    }
+    mtx.unlock();
+    return mr_protocol::OK;
 }
 
 mr_protocol::status Coordinator::submitTask(int taskType, int index, bool &success) {
 	// Lab4 : Your code goes here.
-
+    mtx.lock();
+    switch (taskType) {
+        case MAP:
+            mapTasks[index].isCompleted = true;
+            mapTasks[index].isAssigned = false;
+            completedMapCount++;
+            break;
+        case REDUCE:
+            reduceTasks[index].isCompleted = true;
+            reduceTasks[index].isAssigned = false;
+            completedReduceCount++;
+            break;
+        default:
+            break;
+    }
+    if (completedMapCount >= (long) mapTasks.size()
+        && completedReduceCount >= (long) reduceTasks.size()) {
+        isFinished = true;
+    }
+    mtx.unlock();
+    success = true;
 	return mr_protocol::OK;
 }
 
 string Coordinator::getFile(int index) {
-	this->mtx.lock();
 	string file = this->files[index];
-	this->mtx.unlock();
 	return file;
 }
 
@@ -149,6 +205,8 @@ int main(int argc, char *argv[])
 	// Lab4: Your code here.
 	// Hints: Register "askTask" and "submitTask" as RPC handlers here
 	// 
+    server.reg(mr_protocol::asktask, &c, &Coordinator::askTask);
+    server.reg(mr_protocol::submittask, &c, &Coordinator::submitTask);
 
 	while(!c.Done()) {
 		sleep(1);
